@@ -1,4 +1,7 @@
 // services/mailer.js
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import nodemailer from "nodemailer";
 
 /**
@@ -50,10 +53,17 @@ function ensureTransporter() {
     pool: true,
     maxConnections: 2,
     maxMessages: 50,
-    connectionTimeout: 10_000, // 10s conexión
-    socketTimeout: 10_000, // 10s I/O
-    // Evita errores de CA en entornos de contenedor
+
+    // AUMENTA timeouts para handshake en PaaS:
+    connectionTimeout: 20_000, // 20s
+    socketTimeout: 30_000, // 30s
+
+    requireTLS: !SECURE,
     tls: { rejectUnauthorized: false },
+
+    // Ayuda a depurar en logs de Railway:
+    logger: true, // imprime eventos SMTP en consola
+    debug: true, // añade detalles
   });
 
   return transporterSingleton;
