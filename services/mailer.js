@@ -2,81 +2,227 @@
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
 
-import nodemailer from "nodemailer";
 import fs from "fs";
 
-// ========== ENV ==========
-const MAIL_PROVIDER = String(process.env.MAIL_PROVIDER || "").toLowerCase(); // '' | 'resend'
-const HOST = process.env.MAIL_HOST || "smtp.gmail.com";
-const PORT = Number(process.env.MAIL_PORT || 587);
-const USER = process.env.MAIL_USER;
-const PASS = process.env.MAIL_PASS;
-const SECURE =
-  String(process.env.MAIL_SECURE ?? "false").toLowerCase() === "true";
+// Opcional (solo si dejas Resend como fallback)
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+
+// ===== ENV =====
+const MAIL_PROVIDER = String(process.env.MAIL_PROVIDER || "").toLowerCase(); // 'gmailapi' | 'resend' | ''
+const FROM = process.env.MAIL_FROM || `"TechVenturesCO" <no-reply@localhost>`;
+const REPLY_TO = process.env.MAIL_REPLY_TO || undefined;
+
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
+const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN || "";
+
 const DEBUG =
   String(process.env.MAIL_DEBUG ?? "false").toLowerCase() === "true";
 
-const FROM =
-  process.env.MAIL_FROM ||
-  (USER
-    ? `"TechVenturesCO" <${USER}>`
-    : `"TechVenturesCO" <no-reply@localhost>`);
+// ===== Utiles =====
+function toBase64Url(buffer) {
+  return Buffer.from(buffer)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
 
-const REPLY_TO = process.env.MAIL_REPLY_TO || undefined;
+function buildMime({
+  from,
+  to,
+  cc,
+  bcc,
+  subject,
+  text,
+  html,
+  replyTo,
+  attachments,
+}) {
+  const boundary = "----=_Part_TechVent_" + Date.now();
+  const headers = [];
+  headers.push(`From: ${from}`);
+  headers.push(`To: ${Array.isArray(to) ? to.join(", ") : to}`);
+  if (cc) headers.push(`Cc: ${Array.isArray(cc) ? cc.join(", ") : cc}`);
+  if (bcc) headers.push(`Bcc: ${Array.isArray(bcc) ? bcc.join(", ") : bcc}`);
+  if (replyTo) headers.push(`Reply-To: ${replyTo}`);
+  headers.push(`Subject: ${subject}`);
+  headers.push(`MIME-Version: 1.0`);
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+  const hasAttachments = attachments && attachments.length > 0;
 
-// ========== SMTP helpers ==========
-let transporterSingleton = null;
+  if (!hasAttachments) {
+    if (html && text) {
+      headers.push(
+        `Content-Type: multipart/alternative; boundary="${boundary}"\r\n`
+      );
+      const body = [
+        `--${boundary}`,
+        `Content-Type: text/plain; charset=UTF-8`,
+        `Content-Transfer-Encoding: 7bit`,
+        ``,
+        text,
+        `--${boundary}`,
+        `Content-Type: text/html; charset=UTF-8`,
+        `Content-Transfer-Encoding: 7bit`,
+        ``,
+        html,
+        `--${boundary}--`,
+        ``,
+      ].join("\r\n");
+      return headers.join("\r\n") + "\r\n\r\n" + body;
+    }
+    // solo html o solo text
+    if (html) {
+      headers.push(
+        `Content-Type: text/html; charset=UTF-8`,
+        `Content-Transfer-Encoding: 7bit`,
+        ``
+      );
+      return headers.join("\r\n") + "\r\n\r\n" + html;
+    }
+    headers.push(
+      `Content-Type: text/plain; charset=UTF-8`,
+      `Content-Transfer-Encoding: 7bit`,
+      ``
+    );
+    return headers.join("\r\n") + "\r\n\r\n" + (text || "");
+  }
 
-function makeTransport({ secure, port }) {
-  if (!HOST || !port || !USER || !PASS) {
+  // Con adjuntos
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"\r\n`);
+  const parts = [];
+
+  // Parte alternativa (texto/html)
+  const altBoundary = boundary + "_alt";
+  parts.push(`--${boundary}`);
+  parts.push(
+    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+    ``
+  );
+
+  // text
+  parts.push(`--${altBoundary}`);
+  parts.push(`Content-Type: text/plain; charset=UTF-8`);
+  parts.push(`Content-Transfer-Encoding: 7bit`, ``);
+  parts.push(text || "");
+
+  // html
+  if (html) {
+    parts.push(`--${altBoundary}`);
+    parts.push(`Content-Type: text/html; charset=UTF-8`);
+    parts.push(`Content-Transfer-Encoding: 7bit`, ``);
+    parts.push(html);
+  }
+  parts.push(`--${altBoundary}--`, ``);
+
+  // adjuntos
+  for (const a of attachments || []) {
+    let content = null;
+    if (a.content && Buffer.isBuffer(a.content)) {
+      content = a.content.toString("base64");
+    } else if (a.path) {
+      content = fs.readFileSync(a.path).toString("base64");
+    } else if (typeof a.content === "string") {
+      content = Buffer.from(a.content, "utf8").toString("base64");
+    } else {
+      continue;
+    }
+    parts.push(`--${boundary}`);
+    parts.push(
+      `Content-Type: ${a.contentType || "application/octet-stream"}; name="${
+        a.filename || "attachment"
+      }"`
+    );
+    parts.push(`Content-Transfer-Encoding: base64`);
+    parts.push(
+      `Content-Disposition: attachment; filename="${
+        a.filename || "attachment"
+      }"`,
+      ``
+    );
+    parts.push(content);
+    parts.push(``);
+  }
+
+  parts.push(`--${boundary}--`, ``);
+  return headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n");
+}
+
+async function fetchGmailAccessToken() {
+  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) {
     throw new Error(
-      "[mailer] Faltan vars MAIL_HOST/MAIL_PORT/MAIL_USER/MAIL_PASS"
+      "[mailer] Falta GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN"
     );
   }
-  return nodemailer.createTransport({
-    host: HOST,
-    port,
-    secure, // 465=true, 587=false
-    auth: { user: USER, pass: PASS },
+  const params = new URLSearchParams();
+  params.set("client_id", GMAIL_CLIENT_ID);
+  params.set("client_secret", GMAIL_CLIENT_SECRET);
+  params.set("refresh_token", GMAIL_REFRESH_TOKEN);
+  params.set("grant_type", "refresh_token");
 
-    pool: true,
-    maxConnections: 2,
-    maxMessages: 50,
-
-    connectionTimeout: 20_000,
-    greetingTimeout: 15_000,
-    socketTimeout: 30_000,
-
-    requireTLS: !secure,
-    tls: { rejectUnauthorized: false, servername: HOST },
-
-    logger: DEBUG,
-    debug: DEBUG,
-    name: "techventuresco-backend",
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
   });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`[gmail] token HTTP ${res.status} ${res.statusText} ${t}`);
+  }
+  const json = await res.json();
+  if (DEBUG) console.log("[gmail] token ok, exp:", json.expires_in);
+  return json.access_token;
 }
 
-function ensureTransporter() {
-  if (transporterSingleton) return transporterSingleton;
-  transporterSingleton = makeTransport({ secure: SECURE, port: PORT });
-  return transporterSingleton;
-}
+async function sendViaGmailAPI({
+  to,
+  subject,
+  html,
+  text,
+  cc,
+  bcc,
+  attachments,
+  headers,
+}) {
+  const accessToken = await fetchGmailAccessToken();
+  const raw = buildMime({
+    from: FROM,
+    to,
+    cc,
+    bcc,
+    subject,
+    text,
+    html,
+    replyTo: REPLY_TO,
+    attachments,
+  });
+  const body = { raw: toBase64Url(raw) };
 
-function isTimeoutOrConnErr(err) {
-  const msg = String(err?.message || "").toLowerCase();
-  return (
-    msg.includes("timeout") ||
-    msg.includes("timed out") ||
-    msg.includes("connection closed") ||
-    msg.includes("unable to establish") ||
-    msg.includes("connect e")
+  const res = await fetch(
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        ...(headers || {}),
+      },
+      body: JSON.stringify(body),
+    }
   );
+
+  if (!res.ok) {
+    const errTxt = await res.text().catch(() => "");
+    throw new Error(
+      `[gmail] send HTTP ${res.status} ${res.statusText} ${errTxt}`
+    );
+  }
+  const json = await res.json();
+  return { messageId: json.id || null, provider: "gmailapi" };
 }
 
-// ========== RESEND (HTTP) ==========
-/** Convierte attachments (con path o content Buffer) a formato Resend (base64). */
+// ===== Resend (opcional, solo si pones RESEND_API_KEY) =====
 function mapAttachmentsForResend(attachments) {
   if (!attachments || !attachments.length) return undefined;
   return attachments.map((a) => {
@@ -89,10 +235,7 @@ function mapAttachmentsForResend(attachments) {
     } else if (typeof a.content === "string") {
       contentBase64 = Buffer.from(a.content, "utf8").toString("base64");
     }
-    return {
-      filename: a.filename || "attachment",
-      content: contentBase64,
-    };
+    return { filename: a.filename || "attachment", content: contentBase64 };
   });
 }
 
@@ -106,9 +249,8 @@ async function sendViaResend({
   attachments,
   headers,
 }) {
-  if (!RESEND_API_KEY) {
+  if (!RESEND_API_KEY)
     throw new Error("[mailer] RESEND_API_KEY no configurado");
-  }
   const payload = {
     from: FROM,
     to: Array.isArray(to) ? to : [to],
@@ -119,9 +261,8 @@ async function sendViaResend({
     bcc: bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : undefined,
     reply_to: REPLY_TO || undefined,
     headers: headers || undefined,
-    attachments: mapAttachmentsForResend(attachments), // base64 si hay adjuntos
+    attachments: mapAttachmentsForResend(attachments),
   };
-
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -130,7 +271,6 @@ async function sendViaResend({
     },
     body: JSON.stringify(payload),
   });
-
   if (!res.ok) {
     const errTxt = await res.text().catch(() => "");
     throw new Error(`[resend] HTTP ${res.status} ${res.statusText} ${errTxt}`);
@@ -139,8 +279,7 @@ async function sendViaResend({
   return { messageId: json?.id || null, provider: "resend" };
 }
 
-// ========== API unificada ==========
-/** Envío directo (lanza error si falla). SMTP → fallback 465 → Resend */
+// ===== API unificada =====
 export async function sendMail({
   to,
   subject,
@@ -155,7 +294,18 @@ export async function sendMail({
   if (!subject) throw new Error("[sendMail] 'subject' es requerido");
   if (!html && !text) throw new Error("[sendMail] 'html' o 'text' requerido");
 
-  // Forzar Resend si lo indicaste por env
+  if (MAIL_PROVIDER === "gmailapi") {
+    return await sendViaGmailAPI({
+      to,
+      subject,
+      html,
+      text,
+      cc,
+      bcc,
+      attachments,
+      headers,
+    });
+  }
   if (MAIL_PROVIDER === "resend") {
     return await sendViaResend({
       to,
@@ -169,65 +319,20 @@ export async function sendMail({
     });
   }
 
-  // SMTP primario
+  // Si alguien deja MAIL_PROVIDER vacío, intentamos Gmail API y luego Resend si existe
   try {
-    const primary = ensureTransporter();
-    const info = await primary.sendMail({
-      from: FROM,
+    return await sendViaGmailAPI({
       to,
-      cc,
-      bcc,
       subject,
       html,
       text,
-      replyTo: REPLY_TO,
-      headers: { "X-App": "TechVenturesCO Scheduler", ...(headers || {}) },
+      cc,
+      bcc,
       attachments,
+      headers,
     });
-    return info;
-  } catch (err) {
-    const canFallback465 =
-      !SECURE && Number(PORT) === 587 && isTimeoutOrConnErr(err);
-    if (canFallback465) {
-      try {
-        const t2 = makeTransport({ secure: true, port: 465 });
-        const info2 = await t2.sendMail({
-          from: FROM,
-          to,
-          cc,
-          bcc,
-          subject,
-          html,
-          text,
-          replyTo: REPLY_TO,
-          headers: { "X-App": "TechVenturesCO Scheduler", ...(headers || {}) },
-          attachments,
-        });
-        console.warn("[mailer] Fallback 465/SSL exitoso para:", subject);
-        return info2;
-      } catch (err2) {
-        console.error(
-          "[mailer] Fallback 465/SSL falló:",
-          err2?.message || err2
-        );
-        if (RESEND_API_KEY) {
-          console.warn("[mailer] Cambiando a Resend por fallo SMTP…");
-          return await sendViaResend({
-            to,
-            subject,
-            html,
-            text,
-            cc,
-            bcc,
-            attachments,
-            headers,
-          });
-        }
-        throw err2;
-      }
-    }
-    if (RESEND_API_KEY) {
-      console.warn("[mailer] SMTP falló; enviando por Resend…");
+  } catch (e) {
+    if (RESEND_API_KEY)
       return await sendViaResend({
         to,
         subject,
@@ -238,12 +343,10 @@ export async function sendMail({
         attachments,
         headers,
       });
-    }
-    throw err;
+    throw e;
   }
 }
 
-/** Envío que NUNCA rompe el flujo de la app. */
 export async function sendMailSafe(msg) {
   try {
     await sendMail(msg);
@@ -253,38 +356,11 @@ export async function sendMailSafe(msg) {
   }
 }
 
-/** Verifica proveedor de envío. */
 export async function verifySMTP() {
-  if (MAIL_PROVIDER === "resend") {
-    return { ok: true, provider: "resend" };
-  }
-  try {
-    const t = ensureTransporter();
-    await t.verify();
-    console.log("[mailer] SMTP OK", HOST, PORT, "secure=", SECURE);
-    return { ok: true, provider: "smtp" };
-  } catch (err) {
-    const canFallback465 =
-      !SECURE && Number(PORT) === 587 && isTimeoutOrConnErr(err);
-    console.warn("[mailer] verifySMTP primario:", String(err?.message || err));
-    if (canFallback465) {
-      try {
-        const t2 = makeTransport({ secure: true, port: 465 });
-        await t2.verify();
-        console.log("[mailer] SMTP OK por fallback 465/SSL");
-        return { ok: true, provider: "smtp-465" };
-      } catch (err2) {
-        console.warn(
-          "[mailer] verifySMTP fallback:",
-          String(err2?.message || err2)
-        );
-        if (RESEND_API_KEY) return { ok: true, provider: "resend" };
-        return { ok: false, error: String(err2?.message || err2) };
-      }
-    }
-    if (RESEND_API_KEY) return { ok: true, provider: "resend" };
-    return { ok: false, error: String(err?.message || err) };
-  }
+  if (MAIL_PROVIDER === "gmailapi") return { ok: true, provider: "gmailapi" };
+  if (MAIL_PROVIDER === "resend")
+    return { ok: !!RESEND_API_KEY, provider: "resend" };
+  return { ok: false, error: "MAIL_PROVIDER no configurado" };
 }
 
 export default { sendMail, sendMailSafe, verifySMTP };
