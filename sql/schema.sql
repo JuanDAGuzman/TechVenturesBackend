@@ -1,5 +1,5 @@
 -- ============================================================================
--- Database: techventures (estructura base)
+-- Database: techventures (estructura base, idempotente y NO destructiva)
 -- Compatibilidad: PostgreSQL 14+
 -- ============================================================================
 
@@ -10,76 +10,70 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Tabla principal de citas / appointments
 -- ============================================================================
 
-DROP TABLE IF EXISTS appointments CASCADE;
-
-CREATE TABLE appointments (
+-- 1) Crea la tabla si no existe (solo columnas mínimas para poder ALTER después)
+CREATE TABLE IF NOT EXISTS appointments (
   id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-
-  -- Tipo de cita: TRYOUT (ensayar), PICKUP (sin ensayo), SHIPPING (envío)
   type_code           TEXT NOT NULL,
-
-  -- Fecha de la cita (día)
   date                DATE NOT NULL,
-
-  -- Horarios (opcionales si es envío)
   start_time          TIME NULL,
   end_time            TIME NULL,
-
-  -- Datos de cliente
   customer_name       TEXT NOT NULL,
   customer_email      TEXT NOT NULL,
   customer_phone      TEXT NOT NULL,
-  customer_id_number  TEXT NULL,          -- <- ya la necesita el backend
-  notes TEXT NULL,
-  shipping_cost          NUMERIC(12,2) NULL, -- valor del envío / tarifa PICAP
-  shipping_trip_link     TEXT NULL,          -- link del viaje (ej. pibox)
-
-  -- Producto libre
-  product             TEXT NULL,
-
-  -- Método de entrega: IN_PERSON | SHIPPING
   delivery_method     TEXT NOT NULL,
-
-  -- Estado de la cita: CONFIRMED | CANCELLED | DONE | SHIPPED
   status              TEXT NOT NULL DEFAULT 'CONFIRMED',
-
-  -- Datos de envío (solo si delivery_method = SHIPPING)
-  shipping_address        TEXT NULL,
-  shipping_neighborhood   TEXT NULL,
-  shipping_city           TEXT NULL,
-  shipping_carrier        TEXT NULL, -- p.ej. PICAP, INTERRAPIDISIMO
-
-  -- Tracking
-  tracking_number     TEXT NULL,
-  tracking_file_url   TEXT NULL, -- compatibilidad (NULL en flujo actual)
-  shipped_at          TIMESTAMP NULL,
-
-  -- Recordatorios (usado por el worker)
-  reminded_once_at    TIMESTAMP NULL,     -- <- NUEVA: para no volver a avisar
-
-  -- Auditoría
   created_at          TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Restricciones de dominio
+-- 2) Añadir/asegurar columnas que usamos (sin borrar nada)
 ALTER TABLE appointments
-  ADD CONSTRAINT chk_type_code_known
-  CHECK (type_code IN ('TRYOUT', 'PICKUP', 'SHIPPING'));
+  ADD COLUMN IF NOT EXISTS customer_id_number  TEXT NULL,
+  ADD COLUMN IF NOT EXISTS product             TEXT NULL,
+  ADD COLUMN IF NOT EXISTS notes               TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_address        TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_neighborhood   TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_city           TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_carrier        TEXT NULL,
+  ADD COLUMN IF NOT EXISTS tracking_number     TEXT NULL,
+  ADD COLUMN IF NOT EXISTS tracking_file_url   TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipped_at          TIMESTAMP NULL,
+  ADD COLUMN IF NOT EXISTS reminded_once_at    TIMESTAMP NULL,
+  ADD COLUMN IF NOT EXISTS shipping_cost       NUMERIC(12,2) NULL,
+  ADD COLUMN IF NOT EXISTS shipping_trip_link  TEXT NULL;
 
-ALTER TABLE appointments
-  ADD CONSTRAINT chk_delivery_method_known
-  CHECK (delivery_method IN ('IN_PERSON', 'SHIPPING'));
+-- 3) Constraints (añadir solo si no existen)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_type_code_known'
+  ) THEN
+    ALTER TABLE appointments
+      ADD CONSTRAINT chk_type_code_known
+      CHECK (type_code IN ('TRYOUT','PICKUP','SHIPPING'));
+  END IF;
 
-ALTER TABLE appointments
-  ADD CONSTRAINT chk_status_known
-  CHECK (status IN ('CONFIRMED', 'CANCELLED', 'DONE', 'SHIPPED'));
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_delivery_method_known'
+  ) THEN
+    ALTER TABLE appointments
+      ADD CONSTRAINT chk_delivery_method_known
+      CHECK (delivery_method IN ('IN_PERSON','SHIPPING'));
+  END IF;
 
--- Nota semántica:
--- si delivery_method = IN_PERSON idealmente los campos de envío deberían ser NULL;
--- si es SHIPPING, start_time y end_time pueden ser NULL.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_status_known'
+  ) THEN
+    ALTER TABLE appointments
+      ADD CONSTRAINT chk_status_known
+      CHECK (status IN ('CONFIRMED','CANCELLED','DONE','SHIPPED'));
+  END IF;
+END$$;
 
--- Trigger para updated_at
+-- 4) Trigger para updated_at (seguro)
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -88,13 +82,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS tr_appointments_updated_at ON appointments;
-CREATE TRIGGER tr_appointments_updated_at
-BEFORE UPDATE ON appointments
-FOR EACH ROW
-EXECUTE PROCEDURE set_updated_at();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'tr_appointments_updated_at'
+  ) THEN
+    CREATE TRIGGER tr_appointments_updated_at
+    BEFORE UPDATE ON appointments
+    FOR EACH ROW
+    EXECUTE PROCEDURE set_updated_at();
+  END IF;
+END$$;
 
--- Índices útiles
+-- 5) Índices útiles
 CREATE INDEX IF NOT EXISTS idx_appointments_date     ON appointments(date);
 CREATE INDEX IF NOT EXISTS idx_appointments_type     ON appointments(type_code);
 CREATE INDEX IF NOT EXISTS idx_appointments_status   ON appointments(status);
@@ -105,9 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_appointments_email    ON appointments(customer_em
 -- Disponibilidad de sábados
 -- ============================================================================
 
-DROP TABLE IF EXISTS saturday_windows CASCADE;
-
-CREATE TABLE saturday_windows (
+CREATE TABLE IF NOT EXISTS saturday_windows (
   id          BIGSERIAL PRIMARY KEY,
   date        DATE NOT NULL,     -- sábado específico
   start_time  TIME NOT NULL,
@@ -116,23 +114,15 @@ CREATE TABLE saturday_windows (
   created_at  TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_saturday_windows_date  ON saturday_windows(date);
-CREATE INDEX IF NOT EXISTS idx_saturday_windows_range ON saturday_windows(date, start_time, end_time);
+CREATE INDEX IF NOT EXISTS idx_saturday_windows_date
+  ON saturday_windows(date);
+CREATE INDEX IF NOT EXISTS idx_saturday_windows_range
+  ON saturday_windows(date, start_time, end_time);
 
 -- ============================================================================
--- Datos de ejemplo (opcional)
+-- Disponibilidad manual entre semana (weekday_windows)
 -- ============================================================================
 
--- INSERT INTO appointments (type_code, date, start_time, end_time, customer_name, customer_email, customer_phone, product, delivery_method, status)
--- VALUES ('SHIPPING', CURRENT_DATE, NULL, NULL, 'Valentina', 'valentina@example.com', '3111111111', '3060TI EVGA', 'SHIPPING', 'CONFIRMED');
-
--- INSERT INTO saturday_windows (date, start_time, end_time, created_by)
--- VALUES (DATE_TRUNC('week', CURRENT_DATE)::date + 6, '08:00', '11:00', 'admin');  -- próximo sábado
-
--- Requiere la extensión uuid-ossp (ya existe en tu schema).
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- Weekday (manual) windows: abrir huecos L–V o cualquier día puntual
 CREATE TABLE IF NOT EXISTS weekday_windows (
   id           uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
   date         date        NOT NULL,
@@ -143,11 +133,9 @@ CREATE TABLE IF NOT EXISTS weekday_windows (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 
--- Evita duplicados exactos (misma fecha+tipo+hora)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_weekday_windows_unique
   ON weekday_windows(date, type_code, start_time, end_time);
 
--- Índices útiles (opcionales)
 CREATE INDEX IF NOT EXISTS idx_weekday_windows_date
   ON weekday_windows(date);
 CREATE INDEX IF NOT EXISTS idx_weekday_windows_type_date
