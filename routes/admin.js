@@ -78,6 +78,7 @@ router.get("/appointments", async (req, res) => {
         customer_phone,
         customer_id_number,
         product,
+        notes,
         delivery_method,
         status,
         shipping_address,
@@ -122,6 +123,7 @@ router.get("/appointments/:id", async (req, res) => {
         customer_phone,
         customer_id_number,
         product,
+        notes,
         delivery_method,
         status,
         shipping_address,
@@ -343,6 +345,7 @@ router.patch("/appointments/:id", async (req, res) => {
       customer_email,
       customer_phone,
       product,
+      notes,
       status,
       delivery_method,
       shipping_address,
@@ -355,22 +358,24 @@ router.patch("/appointments/:id", async (req, res) => {
 
     const { rows } = await query(
       `
-      UPDATE appointments SET
-        customer_name         = COALESCE($1,  customer_name),
-        customer_id_number    = COALESCE($2,  customer_id_number),
-        customer_email        = COALESCE($3,  customer_email),
-        customer_phone        = COALESCE($4,  customer_phone),
-        product               = COALESCE($5,  product),
-        status                = COALESCE($6,  status),
-        delivery_method       = COALESCE($7,  delivery_method),
-        shipping_address      = COALESCE($8,  shipping_address),
-        shipping_neighborhood = COALESCE($9,  shipping_neighborhood),
-        shipping_city         = COALESCE($10, shipping_city),
-        shipping_carrier      = COALESCE($11, shipping_carrier),
-        shipping_cost         = COALESCE($12, shipping_cost),
-        shipping_trip_link    = COALESCE($13, shipping_trip_link)
-      WHERE id = $14
-      RETURNING id
+   UPDATE appointments SET
+     customer_name         = COALESCE($1,  customer_name),
+     customer_id_number    = COALESCE($2,  customer_id_number),
+     customer_email        = COALESCE($3,  customer_email),
+     customer_phone        = COALESCE($4,  customer_phone),
+     product               = COALESCE($5,  product),
+     notes                 = COALESCE($6,  notes),
+     status                = COALESCE($7,  status),
+     delivery_method       = COALESCE($8,  delivery_method),
+     shipping_address      = COALESCE($9,  shipping_address),
+     shipping_neighborhood = COALESCE($10, shipping_neighborhood),
+     shipping_city         = COALESCE($11, shipping_city),
+     shipping_carrier      = COALESCE($12, shipping_carrier),
+     shipping_cost         = COALESCE($13, shipping_cost),
+     shipping_trip_link    = COALESCE($14, shipping_trip_link)
+    WHERE id = $15
+    RETURNING id
+
       `,
       [
         customer_name || null,
@@ -378,6 +383,7 @@ router.patch("/appointments/:id", async (req, res) => {
         customer_email || null,
         customer_phone || null,
         product || null,
+        notes || null,
         status || null,
         delivery_method || null,
         shipping_address || null,
