@@ -273,6 +273,7 @@ router.post("/appointments", async (req, res) => {
     const apptId = insert.rows[0].id;
 
     // Email bonito
+    // Email bonito (no bloquea la respuesta)
     try {
       const appointmentForEmail = {
         id: apptId,
@@ -296,46 +297,48 @@ router.post("/appointments", async (req, res) => {
         status: "CONFIRMED",
       };
 
-      // ── 1) Correo al cliente
-      {
-        const { subject, html, text } =
-          buildConfirmationEmail(appointmentForEmail);
+      // 1) Cliente
+      const { subject, html, text } =
+        buildConfirmationEmail(appointmentForEmail);
+      const adminBcc = (process.env.MAIL_NOTIFY || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-        // BCC opcional a admins (coma-separado en MAIL_NOTIFY)
-        const adminBcc = (process.env.MAIL_NOTIFY || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-
-        await sendMail({
+      // fire-and-forget
+      import("../services/mailer.js").then(({ sendMailSafe }) => {
+        sendMailSafe({
           to: emailNorm,
           subject,
           html,
           text,
           ...(adminBcc.length ? { bcc: adminBcc } : {}),
         });
-      }
+      });
 
-      // ── 2) Correo interno (completo) para ustedes
-      {
-        const adminTo =
-          process.env.MAIL_NOTIFY ||
-          process.env.ADMIN_NOTIFY ||
-          process.env.MAIL_FROM ||
-          process.env.MAIL_USER;
+      // 2) Admin (copia completa)
+      const adminTo =
+        process.env.MAIL_NOTIFY ||
+        process.env.ADMIN_NOTIFY ||
+        process.env.MAIL_FROM ||
+        process.env.MAIL_USER;
 
-        if (adminTo) {
-          const adminEmail = buildAdminNewAppointmentEmail(appointmentForEmail);
-          await sendMail({
+      if (adminTo) {
+        const adminEmail = buildAdminNewAppointmentEmail(appointmentForEmail);
+        import("../services/mailer.js").then(({ sendMailSafe }) => {
+          sendMailSafe({
             to: adminTo,
             subject: adminEmail.subject,
             html: adminEmail.html,
             text: adminEmail.text,
           });
-        }
+        });
       }
     } catch (e) {
-      console.warn("[mailer] fallo de envío (no bloquea la cita):", e.message);
+      console.warn(
+        "[mailer] preparación de correo falló (no bloquea):",
+        e.message
+      );
     }
 
     res.json({ ok: true, id: apptId });

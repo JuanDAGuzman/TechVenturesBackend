@@ -2,20 +2,23 @@
 import nodemailer from "nodemailer";
 
 /**
- * Soporta ambas convenciones de vars:
- * - Preferencia: MAIL_HOST/MAIL_PORT/MAIL_USER/MAIL_PASS/MAIL_FROM/MAIL_SECURE
- * - Alternativa: SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_SECURE
+ * Variables esperadas (Railway):
+ * MAIL_HOST=smtp.gmail.com
+ * MAIL_PORT=587
+ * MAIL_USER=tu_cuenta@gmail.com
+ * MAIL_PASS=APP_PASSWORD_16C
+ * MAIL_FROM="TechVenturesCO <tu_cuenta@gmail.com>"
+ * MAIL_SECURE=false  (importante para 587/STARTTLS)
+ *
+ * Opcional:
+ * MAIL_REPLY_TO=soporte@tu-dominio.com
  */
-const HOST = process.env.MAIL_HOST || process.env.SMTP_HOST;
-const PORT = Number(process.env.MAIL_PORT || process.env.SMTP_PORT || 587);
-const USER = process.env.MAIL_USER || process.env.SMTP_USER;
-const PASS = process.env.MAIL_PASS || process.env.SMTP_PASS;
+const HOST = process.env.MAIL_HOST || "smtp.gmail.com";
+const PORT = Number(process.env.MAIL_PORT || 587);
+const USER = process.env.MAIL_USER;
+const PASS = process.env.MAIL_PASS;
 const SECURE =
-  String(
-    process.env.MAIL_SECURE ??
-      process.env.SMTP_SECURE ??
-      (PORT === 465 ? "true" : "false")
-  ).toLowerCase() === "true";
+  String(process.env.MAIL_SECURE ?? "false").toLowerCase() === "true";
 
 const FROM =
   process.env.MAIL_FROM ||
@@ -32,24 +35,31 @@ function ensureTransporter() {
 
   if (!HOST || !PORT || !USER || !PASS) {
     throw new Error(
-      "[mailer] Faltan variables SMTP/MAIL (MAIL_HOST/MAIL_PORT/MAIL_USER/MAIL_PASS)"
+      "[mailer] Faltan vars MAIL_HOST/MAIL_PORT/MAIL_USER/MAIL_PASS"
     );
   }
 
+  // Gmail en 587 -> secure:false + requireTLS:true (STARTTLS).
+  // Pool, timeouts, y TLS permisivo para contenedores.
   transporterSingleton = nodemailer.createTransport({
     host: HOST,
     port: PORT,
-    secure: SECURE, // true: 465 SSL, false: 587 STARTTLS
+    secure: SECURE, // 465=true (SSL), 587=false (STARTTLS)
+    requireTLS: !SECURE, // fuerza STARTTLS cuando no es SSL puro
     auth: { user: USER, pass: PASS },
+    pool: true,
+    maxConnections: 2,
+    maxMessages: 50,
+    connectionTimeout: 10_000, // 10s conexión
+    socketTimeout: 10_000, // 10s I/O
+    // Evita errores de CA en entornos de contenedor
+    tls: { rejectUnauthorized: false },
   });
 
   return transporterSingleton;
 }
 
-/**
- * Envío genérico.
- * Uso: sendMail({ to, subject, html, text })
- */
+/** Envío directo (lanza error). Úsalo cuando quieras "saber" si falló. */
 export async function sendMail({
   to,
   subject,
@@ -64,8 +74,7 @@ export async function sendMail({
 
   if (!to) throw new Error("[sendMail] 'to' es requerido");
   if (!subject) throw new Error("[sendMail] 'subject' es requerido");
-  if (!html && !text)
-    throw new Error("[sendMail] 'html' o 'text' requerido al menos uno");
+  if (!html && !text) throw new Error("[sendMail] 'html' o 'text' requerido");
 
   const info = await transporter.sendMail({
     from: FROM,
@@ -76,7 +85,6 @@ export async function sendMail({
     html,
     text,
     replyTo: REPLY_TO,
-    attachments,
     headers: {
       "X-App": "TechVenturesCO Scheduler",
       ...(headers || {}),
@@ -86,15 +94,30 @@ export async function sendMail({
   return info;
 }
 
-/** Verifica conexión SMTP (opcional al arrancar el server). */
-export async function verifySMTP() {
-  const transporter = ensureTransporter();
+/**
+ * Envío que NUNCA rompe el flujo de la app.
+ * Loguea si falla y continúa. Úsalo en endpoints que primero deben responder.
+ */
+export async function sendMailSafe(msg) {
   try {
-    await transporter.verify();
+    await sendMail(msg);
+    console.log("[mailer] enviado:", msg.subject);
+  } catch (e) {
+    console.error("[mailer] fallo de envío (no bloquea):", e?.message || e);
+  }
+}
+
+/** Verifica conexión SMTP (útil al arrancar, solo log). */
+export async function verifySMTP() {
+  try {
+    const t = ensureTransporter();
+    await t.verify();
+    console.log("[mailer] SMTP OK");
     return { ok: true };
   } catch (err) {
+    console.warn("[mailer] verifySMTP:", String(err?.message || err));
     return { ok: false, error: String(err?.message || err) };
   }
 }
 
-export default { sendMail, verifySMTP };
+export default { sendMail, sendMailSafe, verifySMTP };

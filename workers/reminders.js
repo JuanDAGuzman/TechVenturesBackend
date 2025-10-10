@@ -2,10 +2,13 @@
 import cron from "node-cron";
 import dayjs from "dayjs";
 import { query } from "../db.js";
-import { sendMail } from "../services/mailer.js";
+import { sendMailSafe, verifySMTP } from "../services/mailer.js";
 import { buildReminderEmail } from "../services/emailTemplates.js";
 
 export function startRemindersWorker() {
+  // Verificación informativa al iniciar el worker (no bloquea)
+  verifySMTP().catch(() => {});
+
   // cada minuto
   cron.schedule("* * * * *", async () => {
     try {
@@ -36,15 +39,21 @@ export function startRemindersWorker() {
       for (const appt of rows) {
         try {
           const { subject, html, text } = buildReminderEmail(appt);
-          await sendMail({
+
+          // Envío sin bloquear el loop del cron:
+          // - No usamos await; si falla queda logueado en sendMailSafe.
+          sendMailSafe({
             to: appt.customer_email,
             subject,
             html,
             text,
           });
-          await query(`UPDATE appointments SET reminded_once_at=NOW() WHERE id=$1`, [
-            appt.id,
-          ]);
+
+          // Marcamos como recordado inmediatamente para evitar reintentos
+          await query(
+            `UPDATE appointments SET reminded_once_at=NOW() WHERE id=$1`,
+            [appt.id]
+          );
         } catch (err) {
           console.warn("[reminder] fallo con cita", appt.id, err.message);
         }
