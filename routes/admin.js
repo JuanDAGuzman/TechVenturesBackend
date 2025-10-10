@@ -512,4 +512,78 @@ router.delete("/saturday-windows", async (req, res) => {
   }
 });
 
+router.get("/weekday-windows", async (req, res) => {
+  try {
+    const { date, type } = req.query || {};
+    if (!date)
+      return res.status(400).json({ ok: false, error: "MISSING_DATE" });
+
+    const params = [date];
+    let sql = `
+      SELECT id,
+             type_code,
+             to_char(start_time,'HH24:MI') AS start,
+             to_char(end_time,'HH24:MI')   AS end
+        FROM weekday_windows
+       WHERE date=$1`;
+
+    if (type) {
+      sql += ` AND type_code=$2`;
+      params.push(type);
+    }
+    sql += ` ORDER BY type_code, start_time ASC`;
+
+    const { rows } = await query(sql, params);
+    return res.json({ ok: true, items: rows });
+  } catch (e) {
+    console.error("[weekday-windows][GET]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.post("/weekday-windows", async (req, res) => {
+  try {
+    const { date, type, ranges } = req.body || {};
+    if (!date || !type || !Array.isArray(ranges) || !ranges.length) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    // NO borramos las existentes; sólo agregamos (para que sea "abrir horario")
+    await query("BEGIN");
+    for (const r of ranges) {
+      if (!/^\d{2}:\d{2}$/.test(r.start) || !/^\d{2}:\d{2}$/.test(r.end)) {
+        await query("ROLLBACK").catch(() => {});
+        return res.status(400).json({ ok: false, error: "INVALID_TIME" });
+      }
+      await query(
+        `INSERT INTO weekday_windows(date, type_code, start_time, end_time, created_by)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT DO NOTHING`,
+        [date, type, r.start, r.end, "admin"]
+      );
+    }
+    await query("COMMIT");
+    return res.json({ ok: true });
+  } catch (e) {
+    await query("ROLLBACK").catch(() => {});
+    console.error("[weekday-windows][POST]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.delete("/weekday-windows/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await query(
+      `DELETE FROM weekday_windows WHERE id=$1 RETURNING id`,
+      [id]
+    );
+    if (!r.rowCount)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[weekday-windows][DELETE]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 export default router;

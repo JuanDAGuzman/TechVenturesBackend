@@ -128,3 +128,27 @@ CREATE INDEX IF NOT EXISTS idx_saturday_windows_range ON saturday_windows(date, 
 
 -- INSERT INTO saturday_windows (date, start_time, end_time, created_by)
 -- VALUES (DATE_TRUNC('week', CURRENT_DATE)::date + 6, '08:00', '11:00', 'admin');  -- próximo sábado
+
+-- Requiere la extensión uuid-ossp (ya existe en tu schema).
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Weekday (manual) windows: abrir huecos L–V o cualquier día puntual
+CREATE TABLE IF NOT EXISTS weekday_windows (
+  id           uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  date         date        NOT NULL,
+  type_code    text        NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
+  start_time   time        NOT NULL,
+  end_time     time        NOT NULL,
+  created_by   text        NULL,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Evita duplicados exactos (misma fecha+tipo+hora)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_weekday_windows_unique
+  ON weekday_windows(date, type_code, start_time, end_time);
+
+-- Índices útiles (opcionales)
+CREATE INDEX IF NOT EXISTS idx_weekday_windows_date
+  ON weekday_windows(date);
+CREATE INDEX IF NOT EXISTS idx_weekday_windows_type_date
+  ON weekday_windows(type_code, date);

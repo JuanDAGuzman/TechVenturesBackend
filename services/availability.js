@@ -29,12 +29,8 @@ function filterTaken(all, taken) {
 }
 
 export async function getAvailability({ dbQuery, date, type }) {
-  // type: 'TRYOUT' | 'PICKUP'
   const d = dayjs(date);
   const dow = d.day(); // 0=Dom, 1=Lun, … 6=Sáb
-
-  // Regla: TRYOUT -> L–V 06:30–07:30 (sábados sólo si hay saturday_windows)
-  //        PICKUP -> L–V 08:00–18:00 (sábados sólo si hay saturday_windows)
   let baseSlots = [];
 
   if (dow >= 1 && dow <= 5) {
@@ -54,13 +50,33 @@ export async function getAvailability({ dbQuery, date, type }) {
       baseSlots.push(...genSlots(date, w.s, w.e));
     });
   } else {
-    // domingo: sin disponibilidad
-    baseSlots = [];
+    baseSlots = []; // domingo
   }
 
-  if (!baseSlots.length) return { date, slots: [] };
+  // NEW: weekday_windows (manuales) – siempre se mezclan si existen para esa fecha+tipo
+  const { rows: extra } = await dbQuery(
+    `SELECT to_char(start_time,'HH24:MI') AS s,
+            to_char(end_time,'HH24:MI')   AS e
+       FROM weekday_windows
+      WHERE date=$1 AND type_code=$2
+      ORDER BY start_time ASC`,
+    [date, type]
+  );
+  extra.forEach((w) => baseSlots.push(...genSlots(date, w.s, w.e)));
 
-  // Tomar ocupados confirmados del mismo tipo
+  // Quita duplicados (si solapan exacto con base)
+  const uniq = [];
+  const seen = new Set();
+  for (const s of baseSlots) {
+    const k = `${s.start}-${s.end}`;
+    if (!seen.has(k)) {
+      seen.add(k);
+      uniq.push(s);
+    }
+  }
+
+  if (!uniq.length) return { date, slots: [] };
+
   const { rows: taken } = await dbQuery(
     `SELECT to_char(start_time,'HH24:MI') AS start_time,
             to_char(end_time,'HH24:MI')   AS end_time
@@ -73,6 +89,6 @@ export async function getAvailability({ dbQuery, date, type }) {
     [date, type]
   );
 
-  const slots = filterTaken(baseSlots, taken);
+  const slots = filterTaken(uniq, taken);
   return { date, slots };
 }
