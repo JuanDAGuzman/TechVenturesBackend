@@ -28,6 +28,17 @@ function toBase64Url(buffer) {
     .replace(/=+$/, "");
 }
 
+const CRLF = "\r\n";
+
+function encodeSubjectUtf8B(s = "") {
+  // "=?UTF-8?B?...?="  (encoded-word para encabezados no ASCII)
+  return `=?UTF-8?B?${Buffer.from(String(s), "utf8").toString("base64")}?=`;
+}
+
+function b64utf8(s = "") {
+  return Buffer.from(String(s), "utf8").toString("base64");
+}
+
 function buildMime({
   from,
   to,
@@ -40,61 +51,70 @@ function buildMime({
   attachments,
 }) {
   const boundary = "----=_Part_TechVent_" + Date.now();
+
   const headers = [];
   headers.push(`From: ${from}`);
   headers.push(`To: ${Array.isArray(to) ? to.join(", ") : to}`);
   if (cc) headers.push(`Cc: ${Array.isArray(cc) ? cc.join(", ") : cc}`);
   if (bcc) headers.push(`Bcc: ${Array.isArray(bcc) ? bcc.join(", ") : bcc}`);
   if (replyTo) headers.push(`Reply-To: ${replyTo}`);
-  headers.push(`Subject: ${subject}`);
+  // 👇 Subject codificado (evita mojibake)
+  headers.push(`Subject: ${encodeSubjectUtf8B(subject || "")}`);
   headers.push(`MIME-Version: 1.0`);
 
   const hasAttachments = attachments && attachments.length > 0;
 
   if (!hasAttachments) {
+    // multipart/alternative (texto + html)
     if (html && text) {
       headers.push(
-        `Content-Type: multipart/alternative; boundary="${boundary}"\r\n`
+        `Content-Type: multipart/alternative; boundary="${boundary}"${CRLF}`
       );
+
       const body = [
         `--${boundary}`,
         `Content-Type: text/plain; charset=UTF-8`,
-        `Content-Transfer-Encoding: 7bit`,
+        `Content-Transfer-Encoding: base64`,
         ``,
-        text,
+        b64utf8(text),
         `--${boundary}`,
         `Content-Type: text/html; charset=UTF-8`,
-        `Content-Transfer-Encoding: 7bit`,
+        `Content-Transfer-Encoding: base64`,
         ``,
-        html,
+        b64utf8(html),
         `--${boundary}--`,
         ``,
-      ].join("\r\n");
-      return headers.join("\r\n") + "\r\n\r\n" + body;
+      ].join(CRLF);
+
+      return headers.join(CRLF) + CRLF + CRLF + body;
     }
-    // solo html o solo text
+
+    // Solo html
     if (html) {
       headers.push(
         `Content-Type: text/html; charset=UTF-8`,
-        `Content-Transfer-Encoding: 7bit`,
+        `Content-Transfer-Encoding: base64`,
         ``
       );
-      return headers.join("\r\n") + "\r\n\r\n" + html;
+      return headers.join(CRLF) + CRLF + CRLF + b64utf8(html);
     }
+
+    // Solo texto
     headers.push(
       `Content-Type: text/plain; charset=UTF-8`,
-      `Content-Transfer-Encoding: 7bit`,
+      `Content-Transfer-Encoding: base64`,
       ``
     );
-    return headers.join("\r\n") + "\r\n\r\n" + (text || "");
+    return headers.join(CRLF) + CRLF + CRLF + b64utf8(text || "");
   }
 
-  // Con adjuntos
-  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"\r\n`);
-  const parts = [];
+  // Con adjuntos (multipart/mixed + multipart/alternative dentro)
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"${CRLF}`);
 
-  // Parte alternativa (texto/html)
+  const parts = [];
   const altBoundary = boundary + "_alt";
+
+  // Parte alternativa (texto / html)
   parts.push(`--${boundary}`);
   parts.push(
     `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
@@ -104,19 +124,19 @@ function buildMime({
   // text
   parts.push(`--${altBoundary}`);
   parts.push(`Content-Type: text/plain; charset=UTF-8`);
-  parts.push(`Content-Transfer-Encoding: 7bit`, ``);
-  parts.push(text || "");
+  parts.push(`Content-Transfer-Encoding: base64`, ``);
+  parts.push(b64utf8(text || ""));
 
   // html
   if (html) {
     parts.push(`--${altBoundary}`);
     parts.push(`Content-Type: text/html; charset=UTF-8`);
-    parts.push(`Content-Transfer-Encoding: 7bit`, ``);
-    parts.push(html);
+    parts.push(`Content-Transfer-Encoding: base64`, ``);
+    parts.push(b64utf8(html));
   }
   parts.push(`--${altBoundary}--`, ``);
 
-  // adjuntos
+  // adjuntos (ya los tenías en base64, lo dejamos igual)
   for (const a of attachments || []) {
     let content = null;
     if (a.content && Buffer.isBuffer(a.content)) {
@@ -128,6 +148,7 @@ function buildMime({
     } else {
       continue;
     }
+
     parts.push(`--${boundary}`);
     parts.push(
       `Content-Type: ${a.contentType || "application/octet-stream"}; name="${
@@ -146,7 +167,8 @@ function buildMime({
   }
 
   parts.push(`--${boundary}--`, ``);
-  return headers.join("\r\n") + "\r\n\r\n" + parts.join("\r\n");
+
+  return headers.join(CRLF) + CRLF + CRLF + parts.join(CRLF);
 }
 
 async function fetchGmailAccessToken() {
