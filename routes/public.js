@@ -11,6 +11,7 @@ import {
 const router = express.Router();
 
 /* ================= Helpers ================= */
+/* ================= Helpers ================= */
 function isValidEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 }
@@ -36,23 +37,12 @@ function add15(hm) {
     .add(15, "minute");
   return t.format("HH:mm");
 }
-
+// diff en minutos entre "HH:MM" y "HH:MM"
 function minutesBetween(startHHMM, endHHMM) {
   if (!startHHMM || !endHHMM) return null;
   const [sh, sm] = startHHMM.split(":").map(Number);
   const [eh, em] = endHHMM.split(":").map(Number);
   return eh * 60 + em - (sh * 60 + sm);
-}
-
-function add15(hm) {
-  const [H, M] = (hm || "00:00").split(":").map(Number);
-  const t = dayjs()
-    .hour(H)
-    .minute(M)
-    .second(0)
-    .millisecond(0)
-    .add(15, "minute");
-  return t.format("HH:mm");
 }
 
 /* ================= Env limits ================= */
@@ -108,7 +98,7 @@ router.post("/appointments", async (req, res) => {
       type_code, // TRYOUT | PICKUP | SHIPPING
       date, // YYYY-MM-DD
       start_time, // HH:MM
-      end_time, // <-- NUEVO (opcional, preferido)
+      end_time, // <-- opcional (si viene, se respeta)
       product,
       customer_name,
       customer_email,
@@ -149,7 +139,6 @@ router.post("/appointments", async (req, res) => {
     const idDigits = toDigits(customer_id_number);
 
     // -------- Reglas por tipo --------
-    // -------- Reglas por tipo --------
     let finalStart = start_time || null;
     let finalEnd = null;
 
@@ -161,18 +150,18 @@ router.post("/appointments", async (req, res) => {
       // si viene end_time, úsalo; si no, +15
       finalEnd = end_time || add15(start_time);
 
-      // validar rango si el cliente envió end_time
+      // validar rango
       const diff = minutesBetween(finalStart, finalEnd);
       if (diff == null || diff <= 0) {
         return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
       }
 
-      // choque exacto del slot
+      // choque exacto del slot (start y end iguales)
       const clash = await query(
         `SELECT 1 FROM appointments
-     WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
-       AND start_time=$3 AND end_time=$4
-     LIMIT 1`,
+         WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
+           AND start_time=$3 AND end_time=$4
+         LIMIT 1`,
         [type_code, date, finalStart, finalEnd]
       );
       if (clash.rows.length) {
@@ -194,21 +183,19 @@ router.post("/appointments", async (req, res) => {
     }
 
     // ============= LIMITES ANTI-SPAM =============
-    // A) Máx. 1 solicitud del mismo usuario para la MISMA FECHA (cubre los 3 tipos),
-    //    excluyendo CANCELLED
     const sameDaySameType = await query(
       `
-   SELECT 1 FROM appointments
-   WHERE date = $1
-     AND type_code = $2
-     AND status <> 'CANCELLED'
-     AND (
-       LOWER(customer_email) = $3
-       OR customer_phone = $4
-       OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
-     )
-   LIMIT 1
- `,
+      SELECT 1 FROM appointments
+      WHERE date = $1
+        AND type_code = $2
+        AND status <> 'CANCELLED'
+        AND (
+          LOWER(customer_email) = $3
+          OR customer_phone = $4
+          OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
+        )
+      LIMIT 1
+      `,
       [date, type_code, emailNorm, phoneDigits, idDigits || null]
     );
 
@@ -220,7 +207,7 @@ router.post("/appointments", async (req, res) => {
       });
     }
 
-    // B) Límite semanal para SHIPPING
+    // Límite semanal para SHIPPING
     if (type_code === "SHIPPING") {
       const startOfWeek = dayjs(date).startOf("week").format("YYYY-MM-DD");
       const endOfWeek = dayjs(date).endOf("week").format("YYYY-MM-DD");
@@ -237,7 +224,7 @@ router.post("/appointments", async (req, res) => {
             OR customer_phone = $4
             OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
           )
-      `,
+        `,
         [startOfWeek, endOfWeek, emailNorm, phoneDigits, idDigits || null]
       );
 
@@ -251,7 +238,7 @@ router.post("/appointments", async (req, res) => {
     }
     // ============= FIN LIMITES =============
 
-    // -------- INSERT (¡¡orden correcto!!) --------
+    // -------- INSERT --------
     const insert = await query(
       `INSERT INTO appointments (
          type_code, date, start_time, end_time, product,
@@ -268,8 +255,8 @@ router.post("/appointments", async (req, res) => {
         finalEnd,
         product || null,
         customer_name,
-        emailNorm, // ✅ email normalizado → customer_email
-        phoneDigits, // ✅ solo dígitos → customer_phone
+        emailNorm,
+        phoneDigits,
         idDigits || null,
         delivery_method ||
           (type_code === "SHIPPING" ? "SHIPPING" : "IN_PERSON"),
@@ -281,9 +268,9 @@ router.post("/appointments", async (req, res) => {
       ]
     );
     const apptId = insert.rows[0].id;
-    const minutes = minutesBetween(finalStart, finalEnd);
-    // Email bonito
-    // Email bonito (no bloquea la respuesta)
+    const minutes = minutesBetween(finalStart, finalEnd); // null si SHIPPING
+
+    // -------- Emails (no bloquea la respuesta) --------
     try {
       const appointmentForEmail = {
         id: apptId,
@@ -291,7 +278,7 @@ router.post("/appointments", async (req, res) => {
         date,
         start_time: finalStart,
         end_time: finalEnd,
-        minutes, // <-- NUEVO
+        minutes, // <- para las plantillas dinámicas
         product,
         customer_name,
         customer_email: emailNorm,
@@ -316,7 +303,6 @@ router.post("/appointments", async (req, res) => {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      // fire-and-forget
       import("../services/mailer.js").then(({ sendMailSafe }) => {
         sendMailSafe({
           to: emailNorm,
@@ -327,7 +313,7 @@ router.post("/appointments", async (req, res) => {
         });
       });
 
-      // 2) Admin (copia completa)
+      // 2) Admin (copia)
       const adminTo =
         process.env.MAIL_NOTIFY ||
         process.env.ADMIN_NOTIFY ||
@@ -352,10 +338,10 @@ router.post("/appointments", async (req, res) => {
       );
     }
 
-    res.json({ ok: true, id: apptId });
+    return res.json({ ok: true, id: apptId });
   } catch (err) {
     console.error("[appointments] error:", err);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
