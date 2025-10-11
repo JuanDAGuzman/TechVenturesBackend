@@ -429,28 +429,60 @@ router.delete("/appointments", async (req, res) => {
 /* ───────────────────────────
    SÁBADOS — ventanas de disponibilidad
    ─────────────────────────── */
+// POST /api/admin/saturday-windows
+// Guarda rangos. Por defecto AGREGA sin borrar; si quieres reemplazar todo usa ?replace=1
 router.post("/saturday-windows", async (req, res) => {
   try {
     const { date, ranges } = req.body || {};
+    const replace = String(req.query.replace || "") === "1";
     if (!date || !Array.isArray(ranges)) {
       return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
     }
 
     await query("BEGIN");
-    await query("DELETE FROM saturday_windows WHERE date=$1", [date]);
+    if (replace) {
+      await query("DELETE FROM saturday_windows WHERE date=$1", [date]);
+    }
 
     for (const r of ranges) {
-      if (!/^\d{2}:\d{2}$/.test(r.start) || !/^\d{2}:\d{2}$/.test(r.end)) {
+      // validar formato HH:MM y orden
+      if (
+        !/^\d{2}:\d{2}$/.test(r.start || "") ||
+        !/^\d{2}:\d{2}$/.test(r.end || "") ||
+        r.start >= r.end
+      ) {
         await query("ROLLBACK").catch(() => {});
         return res.status(400).json({ ok: false, error: "INVALID_TIME" });
       }
-      await query(
+
+      // ── AQUÍ: validar slot_minutes y guardar ──────────────────────────
+      const validSlots = [15, 20, 30];
+      const minutes = Number(r.slot_minutes || 15);
+      if (!validSlots.includes(minutes)) {
+        await query("ROLLBACK").catch(() => {});
+        return res.status(400).json({ ok: false, error: "INVALID_SLOT" });
+      }
+
+      // evitar solapes con rangos ya guardados ese día
+      const { rows: ov } = await query(
         `
-        INSERT INTO saturday_windows (date, start_time, end_time, created_by)
-        VALUES ($1, $2, $3, $4)
+        SELECT 1 FROM saturday_windows
+         WHERE date=$1
+           AND NOT ($2 >= end_time OR $3 <= start_time)
         `,
-        [date, r.start, r.end, "admin"]
+        [date, r.start, r.end]
       );
+      if (ov.length) {
+        await query("ROLLBACK").catch(() => {});
+        return res.status(400).json({ ok: false, error: "OVERLAP" });
+      }
+
+      await query(
+        `INSERT INTO saturday_windows(date, start_time, end_time, created_by, slot_minutes)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [date, r.start, r.end, "admin", minutes]
+      );
+      // ─────────────────────────────────────────────────────────────────
     }
 
     await query("COMMIT");
@@ -516,15 +548,38 @@ router.patch("/saturday-windows/:id", async (req, res) => {
     ) {
       return res.status(400).json({ ok: false, error: "INVALID_TIME" });
     }
-    const r = await query(
-      `UPDATE saturday_windows SET start_time=$2, end_time=$3 WHERE id=$1 RETURNING id`,
+    // leer fecha del registro
+    const { rows: cur } = await query(
+      `SELECT date FROM saturday_windows WHERE id=$1`,
+      [id]
+    );
+    if (!cur.length)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    const date = cur[0].date;
+
+    // evitar solapes con otros rangos del mismo día
+    const { rows: overlap } = await query(
+      `
+      SELECT 1
+        FROM saturday_windows
+       WHERE date=$1 AND id<>$2
+         AND NOT ($3 >= end_time OR $4 <= start_time)
+      `,
+      [date, id, start, end]
+    );
+    if (overlap.length) {
+      return res.status(400).json({ ok: false, error: "OVERLAP" });
+    }
+
+    await query(
+      `UPDATE saturday_windows
+          SET start_time=$2, end_time=$3
+        WHERE id=$1`,
       [id, start, end]
     );
-    if (!r.rowCount)
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true });
   } catch (e) {
-    console.error("[saturday-windows][PATCH]", e);
+    console.error("[PATCH saturday-windows/:id]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
@@ -578,18 +633,31 @@ router.post("/weekday-windows", async (req, res) => {
     if (!date || !type || !Array.isArray(ranges) || !ranges.length) {
       return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
     }
-    // NO borramos las existentes; sólo agregamos (para que sea "abrir horario")
+
     await query("BEGIN");
     for (const r of ranges) {
-      if (!/^\d{2}:\d{2}$/.test(r.start) || !/^\d{2}:\d{2}$/.test(r.end)) {
+      if (
+        !/^\d{2}:\d{2}$/.test(r.start) ||
+        !/^\d{2}:\d{2}$/.test(r.end) ||
+        r.start >= r.end
+      ) {
         await query("ROLLBACK").catch(() => {});
         return res.status(400).json({ ok: false, error: "INVALID_TIME" });
       }
+
+      // NUEVO: validar tamaño de bloque
+      const validSlots = [15, 20, 30];
+      const minutes = Number(r.slot_minutes || 15);
+      if (!validSlots.includes(minutes)) {
+        await query("ROLLBACK").catch(() => {});
+        return res.status(400).json({ ok: false, error: "INVALID_SLOT" });
+      }
+
       await query(
-        `INSERT INTO weekday_windows(date, type_code, start_time, end_time, created_by)
-         VALUES ($1,$2,$3,$4,$5)
+        `INSERT INTO weekday_windows(date, type_code, start_time, end_time, created_by, slot_minutes)
+         VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT DO NOTHING`,
-        [date, type, r.start, r.end, "admin"]
+        [date, type, r.start, r.end, "admin", minutes]
       );
     }
     await query("COMMIT");
@@ -613,17 +681,38 @@ router.patch("/weekday-windows/:id", async (req, res) => {
     ) {
       return res.status(400).json({ ok: false, error: "INVALID_TIME" });
     }
-    const r = await query(
-      `UPDATE weekday_windows SET start_time=$2, end_time=$3 WHERE id=$1 RETURNING id`,
+    const { rows: cur } = await query(
+      `SELECT date, type_code FROM weekday_windows WHERE id=$1`,
+      [id]
+    );
+    if (!cur.length)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    const { date, type_code } = cur[0];
+
+    // evitar solapes con otros manuales del mismo día+tipo
+    const { rows: overlap } = await query(
+      `
+      SELECT 1
+        FROM weekday_windows
+       WHERE date=$1 AND type_code=$2 AND id<>$3
+         AND NOT ($4 >= end_time OR $5 <= start_time)
+      `,
+      [date, type_code, id, start, end]
+    );
+    if (overlap.length) {
+      return res.status(400).json({ ok: false, error: "OVERLAP" });
+    }
+
+    await query(
+      `UPDATE weekday_windows
+          SET start_time=$2, end_time=$3
+        WHERE id=$1`,
       [id, start, end]
     );
-    if (!r.rowCount)
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true });
   } catch (e) {
-    console.error("[weekday-windows][PATCH]", e);
+    console.error("[PATCH weekday-windows/:id]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
-
 export default router;

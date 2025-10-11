@@ -140,3 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_weekday_windows_date
   ON weekday_windows(date);
 CREATE INDEX IF NOT EXISTS idx_weekday_windows_type_date
   ON weekday_windows(type_code, date);
+
+ALTER TABLE saturday_windows  ADD COLUMN IF NOT EXISTS slot_minutes integer NOT NULL DEFAULT 15;
+ALTER TABLE weekday_windows   ADD COLUMN IF NOT EXISTS slot_minutes integer NOT NULL DEFAULT 15;
+
