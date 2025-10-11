@@ -3,8 +3,8 @@ import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween.js";
 dayjs.extend(isBetween);
 
-// Genera slots [start,end) cada 15 min entre HH:MM y HH:MM (sin cruzar día)
-function genSlots(dateStr, fromHHMM, toHHMM) {
+// Genera slots [start,end) cada `minutes` min entre HH:MM y HH:MM (sin cruzar día)
+function genSlots(dateStr, fromHHMM, toHHMM, minutes = 15) {
   const [fh, fm] = fromHHMM.split(":").map(Number);
   const [th, tm] = toHHMM.split(":").map(Number);
   let t = dayjs(dateStr).hour(fh).minute(fm).second(0).millisecond(0);
@@ -13,10 +13,10 @@ function genSlots(dateStr, fromHHMM, toHHMM) {
   const out = [];
   while (t.isBefore(end)) {
     const s = t.format("HH:mm");
-    const e = t.add(15, "minute").format("HH:mm");
-    if (dayjs(dateStr + " " + e).isAfter(end)) break;
+    const e = t.add(minutes, "minute").format("HH:mm");
+    if (dayjs(`${dateStr} ${e}`).isAfter(end)) break;
     out.push({ start: s, end: e });
-    t = t.add(15, "minute");
+    t = t.add(minutes, "minute");
   }
   return out;
 }
@@ -34,37 +34,42 @@ export async function getAvailability({ dbQuery, date, type }) {
   let baseSlots = [];
 
   if (dow >= 1 && dow <= 5) {
-    if (type === "TRYOUT") baseSlots = genSlots(date, "06:30", "07:30");
-    if (type === "PICKUP") baseSlots = genSlots(date, "08:00", "18:00");
+    // Base L–V (si los mantienes): 15 min por defecto
+    if (type === "TRYOUT") baseSlots = genSlots(date, "06:30", "07:30", 15);
+    if (type === "PICKUP") baseSlots = genSlots(date, "08:00", "18:00", 15);
   } else if (dow === 6) {
-    // sábado: usar saturday_windows
+    // Sábado: usar saturday_windows con slot_minutes
     const { rows: wins } = await dbQuery(
       `SELECT to_char(start_time,'HH24:MI') AS s,
-              to_char(end_time,'HH24:MI')   AS e
+              to_char(end_time,'HH24:MI')   AS e,
+              COALESCE(slot_minutes,15)     AS m
          FROM saturday_windows
         WHERE date = $1
         ORDER BY start_time ASC`,
       [date]
     );
     wins.forEach((w) => {
-      baseSlots.push(...genSlots(date, w.s, w.e));
+      baseSlots.push(...genSlots(date, w.s, w.e, Number(w.m) || 15));
     });
   } else {
     baseSlots = []; // domingo
   }
 
-  // NEW: weekday_windows (manuales) – siempre se mezclan si existen para esa fecha+tipo
+  // Weekday manual windows (L–V): también con slot_minutes
   const { rows: extra } = await dbQuery(
     `SELECT to_char(start_time,'HH24:MI') AS s,
-            to_char(end_time,'HH24:MI')   AS e
+            to_char(end_time,'HH24:MI')   AS e,
+            COALESCE(slot_minutes,15)     AS m
        FROM weekday_windows
       WHERE date=$1 AND type_code=$2
       ORDER BY start_time ASC`,
     [date, type]
   );
-  extra.forEach((w) => baseSlots.push(...genSlots(date, w.s, w.e)));
+  extra.forEach((w) =>
+    baseSlots.push(...genSlots(date, w.s, w.e, Number(w.m) || 15))
+  );
 
-  // Quita duplicados (si solapan exacto con base)
+  // Quita duplicados exactos
   const uniq = [];
   const seen = new Set();
   for (const s of baseSlots) {
