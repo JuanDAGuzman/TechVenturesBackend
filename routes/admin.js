@@ -504,6 +504,31 @@ router.delete("/saturday-windows/:id", async (req, res) => {
   }
 });
 
+// PATCH /api/admin/saturday-windows/:id  body: { start, end }
+router.patch("/saturday-windows/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { start, end } = req.body || {};
+    if (
+      !/^\d{2}:\d{2}$/.test(start || "") ||
+      !/^\d{2}:\d{2}$/.test(end || "") ||
+      start >= end
+    ) {
+      return res.status(400).json({ ok: false, error: "INVALID_TIME" });
+    }
+    const r = await query(
+      `UPDATE saturday_windows SET start_time=$2, end_time=$3 WHERE id=$1 RETURNING id`,
+      [id, start, end]
+    );
+    if (!r.rowCount)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[saturday-windows][PATCH]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 router.delete("/saturday-windows", async (req, res) => {
   try {
     const { date } = req.query || {};
@@ -576,18 +601,27 @@ router.post("/weekday-windows", async (req, res) => {
   }
 });
 
-router.delete("/weekday-windows/:id", async (req, res) => {
+// PATCH /api/admin/weekday-windows/:id  body: { start, end }
+router.patch("/weekday-windows/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    const { start, end } = req.body || {};
+    if (
+      !/^\d{2}:\d{2}$/.test(start || "") ||
+      !/^\d{2}:\d{2}$/.test(end || "") ||
+      start >= end
+    ) {
+      return res.status(400).json({ ok: false, error: "INVALID_TIME" });
+    }
     const r = await query(
-      `DELETE FROM weekday_windows WHERE id=$1 RETURNING id`,
-      [id]
+      `UPDATE weekday_windows SET start_time=$2, end_time=$3 WHERE id=$1 RETURNING id`,
+      [id, start, end]
     );
     if (!r.rowCount)
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true });
   } catch (e) {
-    console.error("[weekday-windows][DELETE]", e);
+    console.error("[weekday-windows][PATCH]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
