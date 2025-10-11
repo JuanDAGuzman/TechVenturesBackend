@@ -158,9 +158,6 @@ router.get("/appointments/:id", async (req, res) => {
          shipping_trip_link (text, opcional; útil en PICAP)
    file: guía (pdf/jpg/png/webp) (opcional) — campo: guide
    ─────────────────────────── */
-// PATCH /api/admin/appointments/:id/ship
-// - PICAP: body { shipping_trip_link, shipping_cost? }
-// - Otros: body { tracking_number, shipping_cost? } + (opcional) archivo 'guide'
 router.patch(
   "/appointments/:id/ship",
   upload.any(), // sigue permitiendo multipart para adjunto de guía

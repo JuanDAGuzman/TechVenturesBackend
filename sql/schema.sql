@@ -157,3 +157,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_saturday_windows_unique
 ON saturday_windows(date, start_time, end_time);
 
 
+-- migration opcional
+ALTER TABLE appointments ADD COLUMN slot_minutes integer;
+
+-- backfill para registros existentes con hora
+UPDATE appointments
+SET slot_minutes = EXTRACT(EPOCH FROM (end_time - start_time))/60
+WHERE start_time IS NOT NULL AND end_time IS NOT NULL;

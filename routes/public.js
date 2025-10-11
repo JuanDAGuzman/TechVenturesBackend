@@ -1,7 +1,6 @@
 import express from "express";
 import dayjs from "dayjs";
 import { query } from "../db.js";
-import { sendMail } from "../services/mailer.js";
 import { getAvailability } from "../services/availability.js";
 
 import {
@@ -27,6 +26,24 @@ function toEmailNorm(s = "") {
     .toLowerCase();
 }
 // HH:mm + 15 min
+function add15(hm) {
+  const [H, M] = (hm || "00:00").split(":").map(Number);
+  const t = dayjs()
+    .hour(H)
+    .minute(M)
+    .second(0)
+    .millisecond(0)
+    .add(15, "minute");
+  return t.format("HH:mm");
+}
+
+function minutesBetween(startHHMM, endHHMM) {
+  if (!startHHMM || !endHHMM) return null;
+  const [sh, sm] = startHHMM.split(":").map(Number);
+  const [eh, em] = endHHMM.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+
 function add15(hm) {
   const [H, M] = (hm || "00:00").split(":").map(Number);
   const t = dayjs()
@@ -90,7 +107,8 @@ router.post("/appointments", async (req, res) => {
     const {
       type_code, // TRYOUT | PICKUP | SHIPPING
       date, // YYYY-MM-DD
-      start_time, // HH:MM (TRYOUT/PICKUP)
+      start_time, // HH:MM
+      end_time, // <-- NUEVO (opcional, preferido)
       product,
       customer_name,
       customer_email,
@@ -131,39 +149,31 @@ router.post("/appointments", async (req, res) => {
     const idDigits = toDigits(customer_id_number);
 
     // -------- Reglas por tipo --------
+    // -------- Reglas por tipo --------
     let finalStart = start_time || null;
     let finalEnd = null;
 
-    if (type_code === "TRYOUT") {
-      if (!start_time)
+    if (type_code === "TRYOUT" || type_code === "PICKUP") {
+      if (!start_time) {
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
-      finalEnd = add15(start_time);
-
-      // choque exacto de slot
-      const clash = await query(
-        `SELECT 1 FROM appointments
-         WHERE type_code='TRYOUT' AND date=$1 AND status='CONFIRMED'
-           AND start_time=$2 AND end_time=$3
-         LIMIT 1`,
-        [date, start_time, finalEnd]
-      );
-      if (clash.rows.length) {
-        return res.status(409).json({ ok: false, error: "SLOT_TAKEN" });
       }
-    }
 
-    if (type_code === "PICKUP") {
-      if (!start_time)
-        return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
-      finalEnd = add15(start_time);
+      // si viene end_time, úsalo; si no, +15
+      finalEnd = end_time || add15(start_time);
 
-      // choque exacto de slot (opcional)
+      // validar rango si el cliente envió end_time
+      const diff = minutesBetween(finalStart, finalEnd);
+      if (diff == null || diff <= 0) {
+        return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+      }
+
+      // choque exacto del slot
       const clash = await query(
         `SELECT 1 FROM appointments
-         WHERE type_code='PICKUP' AND date=$1 AND status='CONFIRMED'
-           AND start_time=$2 AND end_time=$3
-         LIMIT 1`,
-        [date, start_time, finalEnd]
+     WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
+       AND start_time=$3 AND end_time=$4
+     LIMIT 1`,
+        [type_code, date, finalStart, finalEnd]
       );
       if (clash.rows.length) {
         return res.status(409).json({ ok: false, error: "SLOT_TAKEN" });
@@ -271,7 +281,7 @@ router.post("/appointments", async (req, res) => {
       ]
     );
     const apptId = insert.rows[0].id;
-
+    const minutes = minutesBetween(finalStart, finalEnd);
     // Email bonito
     // Email bonito (no bloquea la respuesta)
     try {
@@ -281,6 +291,7 @@ router.post("/appointments", async (req, res) => {
         date,
         start_time: finalStart,
         end_time: finalEnd,
+        minutes, // <-- NUEVO
         product,
         customer_name,
         customer_email: emailNorm,

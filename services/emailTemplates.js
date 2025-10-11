@@ -20,6 +20,23 @@ function esc(s = "") {
     .replace(/>/g, "&gt;");
 }
 
+function minutesBetween(start, end) {
+  if (!start || !end) return null;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+function apptMinutes(appt) {
+  if (appt?.minutes != null) return Number(appt.minutes);
+  return minutesBetween(appt?.start_time, appt?.end_time);
+}
+function typeLabelWithMinutes(type, appt) {
+  const m = apptMinutes(appt);
+  if (type === "TRYOUT") return `Ensayo presencial${m ? ` (${m} min)` : ""}`;
+  if (type === "PICKUP") return `Sin ensayo${m ? ` (${m} min)` : ""}`;
+  return "Envío (no contraentrega)";
+}
+
 function formatTimeRange(start, end) {
   if (!start || !end) return "—";
   return `${start} – ${end}`;
@@ -194,11 +211,12 @@ function fmtRange(start, end, date) {
 }
 
 export function buildReminderEmail(appt) {
-  const isVisit = appt.type_code === "TRYOUT" || appt.type_code === "PICKUP";
+  const m = apptMinutes(appt) || 15;
   const methodLabel =
     appt.type_code === "TRYOUT"
-      ? "Ensayo presencial (15 min)"
-      : "Sin ensayo (15 min)";
+      ? `Ensayo presencial (${m} min)`
+      : `Sin ensayo (${m} min)`;
+  const isVisit = appt.type_code === "TRYOUT" || appt.type_code === "PICKUP";
   const date = appt.date;
   const time = appt.start_time ? `${appt.start_time} – ${appt.end_time}` : "—";
 
@@ -238,9 +256,9 @@ export function buildReminderEmail(appt) {
       ${
         appt.type_code === "TRYOUT"
           ? `<ul style="margin:8px 0 0 20px;line-height:1.45">
-               <li>Llega unos minutos antes para aprovechar el bloque de 15 min.</li>
-               <li>Si quieres, trae tu equipo; también tenemos equipo de prueba.</li>
-             </ul>`
+               <li>Llega unos minutos antes para aprovechar el bloque de ${m} min.</li>
+                <li>Si quieres, trae tu equipo; también tenemos equipo de prueba.</li>
+              </ul>`
           : `<ul style="margin:8px 0 0 20px;line-height:1.45">
                <li>Te enviaremos los videos de prueba antes de la entrega.</li>
                <li>Ten listo tu medio de pago.</li>
@@ -395,9 +413,8 @@ export function emailForInPerson(appt) {
 
   const isTryout = type_code === "TRYOUT";
   const tone = isTryout ? "indigo" : "blue";
-  const typeLabel = isTryout
-    ? "Ensayo presencial (15 min)"
-    : "Sin ensayar (15 min)";
+  const typeLabel = typeLabelWithMinutes(type_code, appt);
+  const mins = apptMinutes(appt) || 15;
 
   const title = "Confirmación de cita — TechVenturesCO";
   const preheader = `Tu cita quedó confirmada para el ${dayjs(date).format(
@@ -431,10 +448,10 @@ export function emailForInPerson(appt) {
     };line-height:1.6;">
       ${
         isTryout
-          ? `<li>Llega unos minutos antes para aprovechar los <b>15 min</b> del bloque.</li>
+          ? `<li>Llega unos minutos antes para aprovechar los <b>${mins} min</b> del bloque.</li>
              <li>Si quieres, trae tu equipo; también tenemos <b>equipo de prueba</b>.</li>`
           : `<li>Validaremos tu producto y te enviaremos <b>videos de prueba</b> antes de la entrega.</li>
-             <li>La recogida es dentro del bloque de <b>15 min</b> seleccionado.</li>`
+             <li>La recogida es dentro del bloque de <b>${mins} min</b> seleccionado.</li>`
       }
       <li>Si no puedes asistir, responde a este correo para reprogramar.</li>
     </ul>
@@ -541,12 +558,7 @@ Te contactaremos para confirmar pago y coordinar la recolección.`;
 // ⬇️ PÉGALO al final del archivo (o junto a los otros templates)
 export function buildAdminNewAppointmentEmail(appt) {
   const isShipping = appt.type_code === "SHIPPING";
-  const typeLabel =
-    appt.type_code === "TRYOUT"
-      ? "Ensayo presencial (15 min)"
-      : appt.type_code === "PICKUP"
-      ? "Sin ensayo (15 min)"
-      : "Envío (no contraentrega)";
+  const typeLabel = typeLabelWithMinutes(appt.type_code, appt);
 
   const horario =
     appt.start_time && appt.end_time
@@ -652,12 +664,8 @@ export function buildAdminNewAppointmentEmail(appt) {
 export function buildConfirmationEmail(appt) {
   const isShipping = appt.type_code === "SHIPPING";
   const isPickup = appt.type_code === "PICKUP";
-  const badge =
-    appt.type_code === "TRYOUT"
-      ? "Ensayo presencial (15 min)"
-      : appt.type_code === "PICKUP"
-      ? "Sin ensayo (15 min)"
-      : "Envío (no contraentrega)";
+  const badge = typeLabelWithMinutes(appt.type_code, appt);
+  const mins = apptMinutes(appt) || 15; // fallback visual
 
   const subject = isShipping
     ? "¡Recibimos tus datos de envío!"
@@ -712,7 +720,7 @@ export function buildConfirmationEmail(appt) {
       <h3 style="margin:18px 0 8px 0;color:#0f172a;font-size:16px">Indicaciones:</h3>
       <ul style="margin:0 0 0 18px;padding:0;color:#475569;line-height:1.45">
         <li>Antes de la entrega te enviaremos <b>videos de funcionamiento</b> del producto.</li>
-        <li>El bloque reservado es de <b>hasta 15 min</b> solo para <b>coordinar pago y entrega</b>; normalmente toma pocos minutos.</li>
+        <li>El bloque reservado es de <b>hasta ${mins} min</b> solo para <b>coordinar pago y entrega</b>; normalmente toma pocos minutos.</li>
         <li><b>Confirma tu medio de pago</b> (transferencia/efectivo) antes de llegar.</li>
         <li>Si no puedes asistir, responde a este correo para <b>reprogramar</b>.</li>
       </ul>
@@ -720,7 +728,7 @@ export function buildConfirmationEmail(appt) {
     : `
       <h3 style="margin:18px 0 8px 0;color:#0f172a;font-size:16px">Indicaciones:</h3>
       <ul style="margin:0 0 0 18px;padding:0;color:#475569;line-height:1.45">
-        <li>Llega unos minutos antes para aprovechar los <b>15 min</b> del bloque.</li>
+        <li>Llega unos minutos antes para aprovechar los <b>${mins} min</b> del bloque.</li>
         <li>Si quieres, trae tu equipo; también tenemos <b>equipo de prueba</b>.</li>
         <li>Si no puedes asistir, responde a este correo para <b>reprogramar</b>.</li>
       </ul>
@@ -785,14 +793,14 @@ Modalidad: No contraentrega
 - Al recibir, pagas el costo de envío a la transportadora (si aplica).`
     : isPickup
     ? `Tu entrega sin ensayo fue confirmada
-Fecha: ${appt.date}
-Horario: ${horario}
-Producto: ${appt.product || "-"}
-Estado: ${appt.status || "CONFIRMADA"}
+ Fecha: ${appt.date}
+ Horario: ${horario}
+ Producto: ${appt.product || "-"}
+ Estado: ${appt.status || "CONFIRMADA"}
 
 Indicaciones:
 - Recibirás videos de funcionamiento antes de la entrega.
-- El bloque (hasta 15 min) es para coordinar pago y entrega; suele tomar pocos minutos.
+- El bloque (hasta ${mins} min) es para coordinar pago y entrega; suele tomar pocos minutos.
 - Confirma tu medio de pago (transferencia/efectivo) antes de llegar.
 - Si no puedes asistir, responde para reprogramar.`
     : `Tu cita fue confirmada
@@ -802,7 +810,7 @@ Producto: ${appt.product || "-"}
 Estado: ${appt.status || "CONFIRMADA"}
 
 Indicaciones:
-- Llega unos minutos antes (bloque de 15 min).
+- Llega unos minutos antes (bloque de ${mins} min).
 - Puedes traer tu equipo; también contamos con equipo de prueba.
 - Si no puedes asistir, responde para reprogramar.`;
 
