@@ -434,36 +434,36 @@ router.delete("/appointments", async (req, res) => {
 router.post("/saturday-windows", async (req, res) => {
   try {
     const { date, ranges } = req.body || {};
-    if (!date || !Array.isArray(ranges)) {
+    if (!date || !Array.isArray(ranges) || !ranges.length) {
       return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
     }
 
     const validSlots = [15, 20, 30];
-
     await query("BEGIN");
-    await query("DELETE FROM saturday_windows WHERE date=$1", [date]);
 
     for (const r of ranges) {
-      const start = String(r.start || "");
-      const end = String(r.end || "");
+      const start = (r.start || "").trim();
+      const end = (r.end || "").trim();
       const minutes = Number(r.slot_minutes ?? 15);
 
       if (
         !/^\d{2}:\d{2}$/.test(start) ||
         !/^\d{2}:\d{2}$/.test(end) ||
-        start >= end
+        start >= end ||
+        !validSlots.includes(minutes)
       ) {
         await query("ROLLBACK").catch(() => {});
-        return res.status(400).json({ ok: false, error: "INVALID_TIME" });
-      }
-      if (!validSlots.includes(minutes)) {
-        await query("ROLLBACK").catch(() => {});
-        return res.status(400).json({ ok: false, error: "INVALID_SLOT" });
+        return res
+          .status(400)
+          .json({ ok: false, error: "INVALID_TIME_OR_SLOT" });
       }
 
       await query(
-        `INSERT INTO saturday_windows(date,start_time,end_time,created_by,slot_minutes)
-         VALUES ($1,$2,$3,$4,$5)`,
+        `
+        INSERT INTO saturday_windows(date, start_time, end_time, created_by, slot_minutes)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (date, start_time, end_time) DO NOTHING
+        `,
         [date, start, end, "admin", minutes]
       );
     }
@@ -523,46 +523,35 @@ router.delete("/saturday-windows/:id", async (req, res) => {
 router.patch("/saturday-windows/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { start, end } = req.body || {};
+    const { start, end, slot_minutes } = req.body || {};
+    const validSlots = [15, 20, 30];
+
     if (
-      !/^\d{2}:\d{2}$/.test(start || "") ||
-      !/^\d{2}:\d{2}$/.test(end || "") ||
-      start >= end
+      !/^\d{2}:\d{2}$/.test(start) ||
+      !/^\d{2}:\d{2}$/.test(end) ||
+      start >= end ||
+      (slot_minutes != null && !validSlots.includes(Number(slot_minutes)))
     ) {
-      return res.status(400).json({ ok: false, error: "INVALID_TIME" });
+      return res.status(400).json({ ok: false, error: "INVALID_TIME_OR_SLOT" });
     }
-    // leer fecha del registro
-    const { rows: cur } = await query(
-      `SELECT date FROM saturday_windows WHERE id=$1`,
-      [id]
-    );
-    if (!cur.length)
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-    const date = cur[0].date;
 
-    // evitar solapes con otros rangos del mismo día
-    const { rows: overlap } = await query(
+    const r = await query(
       `
-      SELECT 1
-        FROM saturday_windows
-       WHERE date=$1 AND id<>$2
-         AND NOT ($3 >= end_time OR $4 <= start_time)
+      UPDATE saturday_windows
+         SET start_time = $2,
+             end_time   = $3,
+             slot_minutes = COALESCE($4, slot_minutes)
+       WHERE id = $1
+       RETURNING id
       `,
-      [date, id, start, end]
+      [id, start, end, slot_minutes ?? null]
     );
-    if (overlap.length) {
-      return res.status(400).json({ ok: false, error: "OVERLAP" });
-    }
 
-    await query(
-      `UPDATE saturday_windows
-          SET start_time=$2, end_time=$3
-        WHERE id=$1`,
-      [id, start, end]
-    );
+    if (!r.rowCount)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true });
   } catch (e) {
-    console.error("[PATCH saturday-windows/:id]", e);
+    console.error("[saturday-windows][PATCH]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });

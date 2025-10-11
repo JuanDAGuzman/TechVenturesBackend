@@ -150,3 +150,10 @@ ALTER TABLE weekday_windows
 ADD COLUMN IF NOT EXISTS slot_minutes integer NOT NULL DEFAULT 15;
 
 
+ALTER TABLE saturday_windows ADD COLUMN IF NOT EXISTS slot_minutes INT DEFAULT 15;
+
+-- evita duplicados exactos en una misma fecha
+CREATE UNIQUE INDEX IF NOT EXISTS ux_saturday_windows_unique
+ON saturday_windows(date, start_time, end_time);
+
+
