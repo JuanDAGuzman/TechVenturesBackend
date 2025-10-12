@@ -44,14 +44,21 @@ const upload = multer({
   },
 });
 
+function toMin(hhmm = "") {
+  const [h, m] = String(hhmm).slice(0, 5).split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function minutesBetween(a, b) {
+  if (!a || !b) return null;
+  return toMin(b) - toMin(a);
+}
+/** solape si (a.start < b.end) && (b.start < a.end) */
 function overlaps(aStart, aEnd, bStart, bEnd) {
-  // (a.start < b.end) && (b.start < a.end)
-  return aStart < bEnd && bStart < aEnd;
+  return toMin(aStart) < toMin(bEnd) && toMin(bStart) < toMin(aEnd);
 }
 function isSlotSize(n) {
   return [15, 20, 30].includes(Number(n));
 }
-
 /* Ventanas L-V */
 router.use((req, res, next) => {
   const token = req.headers["x-admin-token"];
@@ -698,23 +705,26 @@ router.delete("/saturday-windows", async (req, res) => {
 router.get("/weekday-windows", async (req, res) => {
   try {
     const { date, type } = req.query || {};
-    if (!date)
+    if (!date) {
       return res.status(400).json({ ok: false, error: "MISSING_DATE" });
+    }
 
     const params = [date];
     let sql = `
-      SELECT id,
-        SELECT id, type_code,
-          to_char(start_time,'HH24:MI') AS start,
-          to_char(end_time,'HH24:MI')   AS end,
+      SELECT
+        id,
+        type_code,
+        to_char(start_time,'HH24:MI') AS start,
+        to_char(end_time,  'HH24:MI') AS end,
         slot_minutes
-        FROM weekday_windows
-       WHERE date=$1`;
+      FROM weekday_windows
+      WHERE date = $1
+    `;
     if (type) {
-      sql += ` AND type_code=$2`;
+      sql += ` AND type_code = $2`;
       params.push(type);
     }
-    sql += ` ORDER BY type_code, start_time ASC`;
+    sql += ` ORDER BY start_time ASC`;
 
     const { rows } = await query(sql, params);
     return res.json({ ok: true, items: rows });
