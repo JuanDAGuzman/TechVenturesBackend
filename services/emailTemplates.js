@@ -232,7 +232,7 @@ function fmtRange(start, end, date) {
   return `${s} – ${e}`;
 }
 
-export function buildReminderEmail(appt, { leadMinutes = 60 } = {}) {
+export function buildReminderEmail(appt, { minutesLeft } = {}) {
   const m = apptMinutes(appt) || 15;
   const methodLabel =
     appt.type_code === "TRYOUT"
@@ -242,15 +242,17 @@ export function buildReminderEmail(appt, { leadMinutes = 60 } = {}) {
   const date = appt.date;
   const time = appt.start_time ? `${appt.start_time} – ${appt.end_time}` : "—";
 
+  // Texto dinámico según minutos reales restantes
+  let etaLabel = "~1 hora";
+  if (typeof minutesLeft === "number") {
+    if (minutesLeft <= 10) etaLabel = "en breve";
+    else if (minutesLeft <= 40) etaLabel = "~30 minutos";
+    else etaLabel = "~1 hora";
+  }
+
   const subject = `Recordatorio: tu cita hoy a las ${
     appt.start_time || ""
   } — TechVenturesCO`;
-
-  // Texto “human-friendly” para 60 o 30 minutos
-  const leadText =
-    leadMinutes >= 60
-      ? `~${Math.round(leadMinutes / 60)} hora${leadMinutes >= 120 ? "s" : ""}`
-      : `~${leadMinutes} minutos`;
 
   const html = `
   <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;max-width:680px;margin:0 auto;color:#0f172a">
@@ -280,7 +282,7 @@ export function buildReminderEmail(appt, { leadMinutes = 60 } = {}) {
     </table>
 
     <div style="margin-top:16px">
-      <p style="margin:0 0 8px"><b>Te esperamos en ${leadText}.</b></p>
+      <p style="margin:0 0 8px"><b>Te esperamos ${etaLabel}.</b></p>
       ${
         appt.type_code === "TRYOUT"
           ? `<ul style="margin:8px 0 0 20px;line-height:1.45">
@@ -296,11 +298,7 @@ export function buildReminderEmail(appt, { leadMinutes = 60 } = {}) {
     <p style="margin-top:16px;color:#64748b;font-size:12px">Este correo se envió automáticamente. Si recibiste este mensaje por error, ignóralo.</p>
   </div>`.trim();
 
-  const text = `Recordatorio: cita ${methodLabel} el ${date} ${time}. Te esperamos en ${
-    leadMinutes >= 60
-      ? `${Math.round(leadMinutes / 60)} h`
-      : `${leadMinutes} min`
-  }.`;
+  const text = `Recordatorio: cita ${methodLabel} el ${date} ${time}. Te esperamos ${etaLabel}.`;
 
   return { subject, html, text };
 }

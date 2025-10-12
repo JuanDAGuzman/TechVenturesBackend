@@ -4,66 +4,80 @@ import { query } from "../db.js";
 import { sendMailSafe, verifySMTP } from "../services/mailer.js";
 import { buildReminderEmail } from "../services/emailTemplates.js";
 
-export function startRemindersWorker() {
-  // No bloquea el arranque
-  verifySMTP().catch(() => {});
+/**
+ * Ayuda: envía recordatorios para un “bucket” de tiempo.
+ * - bucket = '1h'  -> próxima hora (pero >35m para evitar tardíos)
+ * - bucket = '30m' -> próximos 30 minutos
+ * La consulta “reclama” (marca) y devuelve secs_left para el texto dinámico.
+ */
+async function claimAndSend(bucket) {
+  const isHour = bucket === "1h";
 
-  // Helper: arma CTE que "reclama" filas (marca timestamp) y devuelve lote
-  const claimSql = (minutes, column) => `
+  const { rows: toNotify } = await query(
+    `
     WITH now_local AS (
       SELECT (now() AT TIME ZONE 'America/Bogota') AS ts
-    ), claimed AS (
+    ),
+    claimed AS (
       UPDATE appointments a
-         SET ${column} = NOW()
+         SET ${isHour ? "reminded_1h_at" : "reminded_30m_at"} = NOW()
         FROM now_local nl
-       WHERE a.status = 'CONFIRMED'
-         AND a.type_code IN ('TRYOUT','PICKUP')
+       WHERE a.status     = 'CONFIRMED'
+         AND a.type_code  IN ('TRYOUT','PICKUP')
          AND a.start_time IS NOT NULL
-         AND a.${column} IS NULL
          AND a.date = (nl.ts)::date
-         AND (a.date::timestamp + a.start_time)
-             BETWEEN nl.ts AND nl.ts + INTERVAL '${minutes} minutes'
-       RETURNING a.*
+         AND ${isHour ? "a.reminded_1h_at" : "a.reminded_30m_at"} IS NULL
+         -- Ventana amplia para tolerar atrasos:
+         AND (a.date::timestamp + a.start_time) BETWEEN nl.ts AND nl.ts + INTERVAL '${
+           isHour ? "60 minutes" : "30 minutes"
+         }'
+         -- EXTRA (solo 1h): evita mandar un "1 hora" cuando ya quedan <35 min
+         ${
+           isHour
+             ? "AND (a.date::timestamp + a.start_time) - nl.ts > INTERVAL '35 minutes'"
+             : ""
+         }
+       RETURNING
+         a.*,
+         EXTRACT(EPOCH FROM ((a.date::timestamp + a.start_time) - (SELECT ts FROM now_local))) AS secs_left
     )
     SELECT * FROM claimed
     ORDER BY date, start_time
     LIMIT 50
-  `;
+  `
+  );
 
-  // Corre CADA MINUTO (barato: índices filtran, conexión se cierra rápido)
-  cron.schedule("* * * * *", async () => {
-    // 1) ~1 hora antes
+  for (const appt of toNotify) {
     try {
-      const { rows } = await query(claimSql(60, "reminded_1h_at"));
-      for (const appt of rows) {
-        try {
-          const { subject, html, text } = buildReminderEmail(appt);
-          sendMailSafe({ to: appt.customer_email, subject, html, text });
-        } catch (e) {
-          console.warn("[reminder 1h] fallo con cita", appt.id, e.message);
-          // Opcional: desmarcar para reintentar
-          // await query(`UPDATE appointments SET reminded_1h_at = NULL WHERE id=$1`, [appt.id]);
-        }
-      }
+      const minutesLeft = Math.max(0, Math.round(Number(appt.secs_left) / 60));
+      const { subject, html, text } = buildReminderEmail(appt, { minutesLeft });
+      sendMailSafe({ to: appt.customer_email, subject, html, text });
     } catch (e) {
-      console.warn("[reminders 1h] error:", e.message);
+      console.warn("[reminder] fallo con cita", appt.id, e.message);
+      // Si quisieras reintentar en el próximo tick:
+      // await query(`UPDATE appointments SET ${isHour ? "reminded_1h_at" : "reminded_30m_at"} = NULL WHERE id=$1`, [appt.id]);
+    }
+  }
+}
+
+export function startRemindersWorker() {
+  // Verificación SMTP no bloqueante
+  verifySMTP().catch(() => {});
+
+  // Corre cada minuto
+  cron.schedule("* * * * *", async () => {
+    try {
+      // 1 hora
+      await claimAndSend("1h");
+    } catch (e) {
+      console.warn("[reminders][1h] error:", e.message);
     }
 
-    // 2) ~30 minutos antes
     try {
-      const { rows } = await query(claimSql(30, "reminded_30m_at"));
-      for (const appt of rows) {
-        try {
-          const { subject, html, text } = buildReminderEmail(appt);
-          sendMailSafe({ to: appt.customer_email, subject, html, text });
-        } catch (e) {
-          console.warn("[reminder 30m] fallo con cita", appt.id, e.message);
-          // Opcional: desmarcar para reintentar
-          // await query(`UPDATE appointments SET reminded_30m_at = NULL WHERE id=$1`, [appt.id]);
-        }
-      }
+      // 30 minutos
+      await claimAndSend("30m");
     } catch (e) {
-      console.warn("[reminders 30m] error:", e.message);
+      console.warn("[reminders][30m] error:", e.message);
     }
   });
 }
