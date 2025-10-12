@@ -1,4 +1,10 @@
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = "America/Bogota";
 
 const BRAND = {
   indigo: "#6D28D9", // morado TechVentures
@@ -12,6 +18,22 @@ const BRAND = {
   badgePickup: "#EFF6FF", // blue-50
   badgeShip: "#ECFDF5", // emerald-50
 };
+
+function fmtApptLocal(appt) {
+  // Si no hay start_time, mostramos solo la fecha local
+  const base = appt.start_time
+    ? `${appt.date} ${String(appt.start_time).slice(0, 5)}`
+    : `${appt.date} 00:00`;
+  return dayjs
+    .tz(base, "YYYY-MM-DD HH:mm", TZ)
+    .format("ddd DD/MM/YYYY — h:mm a");
+}
+
+function fmtCreatedLocal(appt) {
+  const src = appt.created_at ? appt.created_at : `${appt.date} 00:00`;
+  const fmt = appt.created_at ? "YYYY-MM-DD HH:mm:ss" : "YYYY-MM-DD HH:mm";
+  return dayjs.tz(src, fmt, TZ).format("ddd DD/MM/YYYY — h:mm a");
+}
 
 function esc(s = "") {
   return String(s)
@@ -210,7 +232,7 @@ function fmtRange(start, end, date) {
   return `${s} – ${e}`;
 }
 
-export function buildReminderEmail(appt) {
+export function buildReminderEmail(appt, { leadMinutes = 60 } = {}) {
   const m = apptMinutes(appt) || 15;
   const methodLabel =
     appt.type_code === "TRYOUT"
@@ -223,6 +245,12 @@ export function buildReminderEmail(appt) {
   const subject = `Recordatorio: tu cita hoy a las ${
     appt.start_time || ""
   } — TechVenturesCO`;
+
+  // Texto “human-friendly” para 60 o 30 minutos
+  const leadText =
+    leadMinutes >= 60
+      ? `~${Math.round(leadMinutes / 60)} hora${leadMinutes >= 120 ? "s" : ""}`
+      : `~${leadMinutes} minutos`;
 
   const html = `
   <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;max-width:680px;margin:0 auto;color:#0f172a">
@@ -252,13 +280,13 @@ export function buildReminderEmail(appt) {
     </table>
 
     <div style="margin-top:16px">
-      <p style="margin:0 0 8px"><b>Te esperamos en ~2 horas.</b></p>
+      <p style="margin:0 0 8px"><b>Te esperamos en ${leadText}.</b></p>
       ${
         appt.type_code === "TRYOUT"
           ? `<ul style="margin:8px 0 0 20px;line-height:1.45">
                <li>Llega unos minutos antes para aprovechar el bloque de ${m} min.</li>
-                <li>Si quieres, trae tu equipo; también tenemos equipo de prueba.</li>
-              </ul>`
+               <li>Si quieres, trae tu equipo; también tenemos equipo de prueba.</li>
+             </ul>`
           : `<ul style="margin:8px 0 0 20px;line-height:1.45">
                <li>Te enviaremos los videos de prueba antes de la entrega.</li>
                <li>Ten listo tu medio de pago.</li>
@@ -266,8 +294,13 @@ export function buildReminderEmail(appt) {
       }
     </div>
     <p style="margin-top:16px;color:#64748b;font-size:12px">Este correo se envió automáticamente. Si recibiste este mensaje por error, ignóralo.</p>
-  </div>`;
-  const text = `Recordatorio: cita ${methodLabel} el ${date} ${time}.`;
+  </div>`.trim();
+
+  const text = `Recordatorio: cita ${methodLabel} el ${date} ${time}. Te esperamos en ${
+    leadMinutes >= 60
+      ? `${Math.round(leadMinutes / 60)} h`
+      : `${leadMinutes} min`
+  }.`;
 
   return { subject, html, text };
 }
@@ -349,7 +382,7 @@ export function buildShippedEmail(
     <table style="width:100%;margin-top:16px;border-collapse:collapse;border:1px solid #e2e8f0">
       <tr>
         <td style="width:180px;background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Fecha de solicitud</td>
-        <td style="padding:10px">${esc(appt.date || "-")}</td>
+        <td style="padding:10px">${esc(fmtCreatedLocal(appt))}</td>
       </tr>
       <tr>
         <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Producto</td>

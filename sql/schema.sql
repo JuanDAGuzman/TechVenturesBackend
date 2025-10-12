@@ -28,26 +28,25 @@ CREATE TABLE IF NOT EXISTS appointments (
 
 -- 2) Añadir/asegurar columnas que usamos (sin borrar nada)
 ALTER TABLE appointments
-  ADD COLUMN IF NOT EXISTS customer_id_number  TEXT NULL,
-  ADD COLUMN IF NOT EXISTS product             TEXT NULL,
-  ADD COLUMN IF NOT EXISTS notes               TEXT NULL,
-  ADD COLUMN IF NOT EXISTS shipping_address        TEXT NULL,
-  ADD COLUMN IF NOT EXISTS shipping_neighborhood   TEXT NULL,
-  ADD COLUMN IF NOT EXISTS shipping_city           TEXT NULL,
-  ADD COLUMN IF NOT EXISTS shipping_carrier        TEXT NULL,
-  ADD COLUMN IF NOT EXISTS tracking_number     TEXT NULL,
-  ADD COLUMN IF NOT EXISTS tracking_file_url   TEXT NULL,
-  ADD COLUMN IF NOT EXISTS shipped_at          TIMESTAMP NULL,
-  ADD COLUMN IF NOT EXISTS reminded_once_at    TIMESTAMP NULL,
-  ADD COLUMN IF NOT EXISTS shipping_cost       NUMERIC(12,2) NULL,
-  ADD COLUMN IF NOT EXISTS shipping_trip_link  TEXT NULL;
+  ADD COLUMN IF NOT EXISTS customer_id_number     TEXT NULL,
+  ADD COLUMN IF NOT EXISTS product                TEXT NULL,
+  ADD COLUMN IF NOT EXISTS notes                  TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_address       TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_neighborhood  TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_city          TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipping_carrier       TEXT NULL,
+  ADD COLUMN IF NOT EXISTS tracking_number        TEXT NULL,
+  ADD COLUMN IF NOT EXISTS tracking_file_url      TEXT NULL,
+  ADD COLUMN IF NOT EXISTS shipped_at             TIMESTAMP NULL,
+  ADD COLUMN IF NOT EXISTS reminded_once_at       TIMESTAMP NULL,
+  ADD COLUMN IF NOT EXISTS shipping_cost          NUMERIC(12,2) NULL,
+  ADD COLUMN IF NOT EXISTS shipping_trip_link     TEXT NULL;
 
 -- 3) Constraints (añadir solo si no existen)
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_type_code_known'
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_type_code_known'
   ) THEN
     ALTER TABLE appointments
       ADD CONSTRAINT chk_type_code_known
@@ -55,8 +54,7 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_delivery_method_known'
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_delivery_method_known'
   ) THEN
     ALTER TABLE appointments
       ADD CONSTRAINT chk_delivery_method_known
@@ -64,8 +62,7 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_status_known'
+    SELECT 1 FROM pg_constraint WHERE conname = 'chk_status_known'
   ) THEN
     ALTER TABLE appointments
       ADD CONSTRAINT chk_status_known
@@ -101,6 +98,21 @@ CREATE INDEX IF NOT EXISTS idx_appointments_status   ON appointments(status);
 CREATE INDEX IF NOT EXISTS idx_appointments_delivery ON appointments(delivery_method);
 CREATE INDEX IF NOT EXISTS idx_appointments_email    ON appointments(customer_email);
 
+-- Para consultas por fecha+hora (panel, recordatorios)
+CREATE INDEX IF NOT EXISTS idx_appt_date_time
+  ON appointments (date, start_time);
+
+-- Escaneo genérico de recordatorios (legacy / opcional)
+CREATE INDEX IF NOT EXISTS idx_appt_reminder_scan
+  ON appointments (status, type_code, reminded_once_at);
+
+-- Nuevos recordatorios específicos: 1h y 30m (aceleran el worker)
+CREATE INDEX IF NOT EXISTS idx_appt_rem_1h_scan
+  ON appointments (status, type_code, date, reminded_1h_at, start_time);
+
+CREATE INDEX IF NOT EXISTS idx_appt_rem_30m_scan
+  ON appointments (status, type_code, date, reminded_30m_at, start_time);
+
 -- ============================================================================
 -- Disponibilidad de sábados
 -- ============================================================================
@@ -114,23 +126,32 @@ CREATE TABLE IF NOT EXISTS saturday_windows (
   created_at  TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- evita duplicados exactos en una misma fecha
+CREATE UNIQUE INDEX IF NOT EXISTS ux_saturday_windows_unique
+  ON saturday_windows(date, start_time, end_time);
+
 CREATE INDEX IF NOT EXISTS idx_saturday_windows_date
   ON saturday_windows(date);
+
 CREATE INDEX IF NOT EXISTS idx_saturday_windows_range
   ON saturday_windows(date, start_time, end_time);
+
+-- Slot size de sábados
+ALTER TABLE saturday_windows
+  ADD COLUMN IF NOT EXISTS slot_minutes INTEGER NOT NULL DEFAULT 15;
 
 -- ============================================================================
 -- Disponibilidad manual entre semana (weekday_windows)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS weekday_windows (
-  id           uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  date         date        NOT NULL,
-  type_code    text        NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
-  start_time   time        NOT NULL,
-  end_time     time        NOT NULL,
-  created_by   text        NULL,
-  created_at   timestamptz NOT NULL DEFAULT now()
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  date         DATE        NOT NULL,
+  type_code    TEXT        NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
+  start_time   TIME        NOT NULL,
+  end_time     TIME        NOT NULL,
+  created_by   TEXT        NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_weekday_windows_unique
@@ -138,44 +159,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_weekday_windows_unique
 
 CREATE INDEX IF NOT EXISTS idx_weekday_windows_date
   ON weekday_windows(date);
+
 CREATE INDEX IF NOT EXISTS idx_weekday_windows_type_date
   ON weekday_windows(type_code, date);
 
--- Sábados
-ALTER TABLE saturday_windows
-ADD COLUMN IF NOT EXISTS slot_minutes integer NOT NULL DEFAULT 15;
-
--- L–V (manual)
+-- Slot size de L–V
 ALTER TABLE weekday_windows
-ADD COLUMN IF NOT EXISTS slot_minutes integer NOT NULL DEFAULT 15;
+  ADD COLUMN IF NOT EXISTS slot_minutes INTEGER NOT NULL DEFAULT 15;
 
+-- ============================================================================
+-- Ventanas manuales de disponibilidad (L–V) para panel nuevo
+-- ============================================================================
 
-ALTER TABLE saturday_windows ADD COLUMN IF NOT EXISTS slot_minutes INT DEFAULT 15;
-
--- evita duplicados exactos en una misma fecha
-CREATE UNIQUE INDEX IF NOT EXISTS ux_saturday_windows_unique
-ON saturday_windows(date, start_time, end_time);
-
-
--- migration opcional
-ALTER TABLE appointments ADD COLUMN slot_minutes integer;
-
--- backfill para registros existentes con hora
-UPDATE appointments
-SET slot_minutes = EXTRACT(EPOCH FROM (end_time - start_time))/60
-WHERE start_time IS NOT NULL AND end_time IS NOT NULL;
-
--- Ventanas manuales de disponibilidad
 CREATE TABLE IF NOT EXISTS appt_windows (
-  id SERIAL PRIMARY KEY,
-  date DATE NOT NULL,
-  type_code TEXT NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
-  start_time TIME NOT NULL,
-  end_time TIME NOT NULL,
-  slot_minutes INT NOT NULL CHECK (slot_minutes IN (15,20,30)),
-  created_at TIMESTAMP DEFAULT now(),
+  id           SERIAL PRIMARY KEY,
+  date         DATE NOT NULL,
+  type_code    TEXT NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
+  start_time   TIME NOT NULL,
+  end_time     TIME NOT NULL,
+  slot_minutes INT  NOT NULL CHECK (slot_minutes IN (15,20,30)),
+  created_at   TIMESTAMP DEFAULT now(),
   CONSTRAINT appt_windows_time_valid CHECK (end_time > start_time)
 );
 
 CREATE INDEX IF NOT EXISTS idx_appt_windows_date_type
   ON appt_windows(date, type_code);
+
+-- ============================================================================
+-- Campos auxiliares / migraciones opcionales
+-- ============================================================================
+
+-- Duración (minutos) por cita
+ALTER TABLE appointments
+  ADD COLUMN IF NOT EXISTS slot_minutes INTEGER;
+
+-- Backfill para registros existentes con hora
+UPDATE appointments
+SET slot_minutes = GREATEST(
+  0,
+  FLOOR(EXTRACT(EPOCH FROM (end_time - start_time)) / 60)
+)::INT
+WHERE slot_minutes IS NULL
+  AND start_time IS NOT NULL
+  AND end_time   IS NOT NULL;
+
+-- Nuevos campos de recordatorio (para 1h y 30m)
+ALTER TABLE appointments
+  ADD COLUMN IF NOT EXISTS reminded_1h_at  TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reminded_30m_at TIMESTAMPTZ;
