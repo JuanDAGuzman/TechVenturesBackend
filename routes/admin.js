@@ -541,16 +541,35 @@ router.patch("/appointments/:id", async (req, res) => {
 /* ───────────────────────────
    DELETE /api/admin/appointments (masivo)
    ─────────────────────────── */
+/* ───────────────────────────
+   DELETE /api/admin/appointments (masivo)
+   ─────────────────────────── */
 router.delete("/appointments", async (req, res) => {
   try {
     const { ids } = req.body || {};
+    // Debe venir un array de UUIDs (strings)
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ ok: false, error: "INVALID_IDS" });
     }
+
+    // Normaliza a strings no vacíos
+    const uuids = ids
+      .map((v) => (v == null ? "" : String(v).trim()))
+      .filter(Boolean);
+
+    if (uuids.length === 0) {
+      return res.status(400).json({ ok: false, error: "INVALID_IDS" });
+    }
+
     await query("BEGIN");
-    await query(`DELETE FROM appointments WHERE id = ANY($1::int[])`, [ids]);
+    // IMPORTANTE: castear a uuid[]
+    const r = await query(
+      `DELETE FROM appointments WHERE id = ANY($1::uuid[])`,
+      [uuids]
+    );
     await query("COMMIT");
-    return res.json({ ok: true, deleted: ids.length });
+
+    return res.json({ ok: true, deleted: r.rowCount || 0 });
   } catch (err) {
     await query("ROLLBACK").catch(() => {});
     console.error("[admin] delete appointments error:", err);
