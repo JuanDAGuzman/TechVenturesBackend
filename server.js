@@ -25,9 +25,9 @@ const app = express();
 /* ───────── Base ───────── */
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
 app.use(express.json());
-app.use("/uploads", express.static(path.join(__dirname, "uploads"))); // compat
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* ───────── CORS (allow-list con fallback) ───────── */
+/* ───────── CORS ───────── */
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -44,7 +44,6 @@ app.use(
 );
 
 /* ───────── Rate limits ───────── */
-// 1) 2 req / 5min por IP para crear citas
 const createApptIpLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 2,
@@ -58,7 +57,6 @@ const createApptIpLimiter = rateLimit({
   keyGenerator: ipKeyGenerator,
 });
 
-// 2) 3 req / 15min adicional
 const createApptLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 3,
@@ -67,7 +65,6 @@ const createApptLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", meta: { retry: "15m", max: 3 } },
 });
 
-// 3) Admin: cuenta solo fallos (401)
 const adminBruteforceLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 100,
@@ -81,7 +78,7 @@ const adminBruteforceLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
-/* ───────── Auth admin (x-admin-token) ───────── */
+/* ───────── Auth admin ───────── */
 function requireAdmin(req, res, next) {
   const token = (req.headers["x-admin-token"] || "").trim();
   const expected = (process.env.ADMIN_TOKEN || "").trim();
@@ -93,27 +90,19 @@ function requireAdmin(req, res, next) {
 
 /* ───────── Rutas ───────── */
 const apiRouter = express.Router();
-
-// aplicar limiters SOLO al POST /api/appointments
 apiRouter.post("/appointments", createApptIpLimiter, createApptLimiter);
-
-// públicas
 apiRouter.use(publicRoutes);
 app.use("/api", apiRouter);
 
-// admin (todas requieren header x-admin-token)
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
-
-// diagnósticos (SMTP, etc.)
 app.use("/diag", diagnostics);
 
 /* ───────── Health ───────── */
 app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/api/health", (_req, res) => res.json({ ok: true })); // health del contenedor
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 /* ───────── 404 & Error handler ───────── */
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
-
 app.use((err, _req, res, _next) => {
   const msg = err?.message || "INTERNAL_ERROR";
   if (msg !== "CORS_NOT_ALLOWED") console.error("[ERR]", msg);
@@ -123,16 +112,12 @@ app.use((err, _req, res, _next) => {
 });
 
 /* ───────── Helpers de init de DB (idempotentes) ───────── */
-
-// Aplica el schema pero ignora errores “seguros” de duplicados (columna/tabla/función ya existe)
 async function applySchemaIdempotent() {
   const ddlPath = new URL("./sql/schema.sql", import.meta.url);
   const ddl = fs.readFileSync(ddlPath, "utf8");
   try {
     await query(ddl);
   } catch (e) {
-    // Códigos típicos de duplicado en PG:
-    // 42701 duplicate_column, 42P07 duplicate_table, 42723 duplicate_function, 23505 unique_violation
     const ignorable = new Set(["42701", "42P07", "42723", "23505"]);
     if (ignorable.has(e.code)) {
       console.warn(`[schema] Ignorado (${e.code}): ${e.message}`);
@@ -142,7 +127,6 @@ async function applySchemaIdempotent() {
   }
 }
 
-// (Opcional) Garantiza columna slot_minutes y hace backfill sin romper si ya existe
 async function ensureAppointmentsMinutesColumn() {
   await query(`
     ALTER TABLE appointments
@@ -166,20 +150,18 @@ const PORT = Number(process.env.PORT || 4000);
 
 (async () => {
   try {
-    // Aplica schema de forma idempotente
-    await applySchemaIdempotent();
+    // ▶️ Ejecuta migraciones SOLO si lo pides (ahorra compute en Neon)
+    if (process.env.APPLY_SCHEMA_ON_BOOT === "1") {
+      await applySchemaIdempotent();
+      await ensureAppointmentsMinutesColumn();
+    }
 
-    // (Opcional) Asegura columna/minutos calculados si la necesitas para analytics
-    // Puedes comentar esta línea si no usas slot_minutes en reportes.
-    await ensureAppointmentsMinutesColumn();
-
-    // Verifica SMTP pero NO impide levantar el server
+    // Verifica SMTP pero NO bloquea
     verifySMTP().catch(() => {});
 
-    // Server HTTP con timeouts claros
     const server = http.createServer(app);
-    server.requestTimeout = 30_000; // 30s máx por request
-    server.headersTimeout = 35_000; // > requestTimeout
+    server.requestTimeout = 30_000;
+    server.headersTimeout = 35_000;
     server.keepAliveTimeout = 10_000;
 
     server.listen(PORT, "0.0.0.0", () => {
@@ -191,4 +173,5 @@ const PORT = Number(process.env.PORT || 4000);
   }
 })();
 
+// Worker de recordatorios
 startRemindersWorker();
