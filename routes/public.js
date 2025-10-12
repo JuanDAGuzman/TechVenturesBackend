@@ -1,3 +1,4 @@
+// backend/routes/public.js
 import express from "express";
 import dayjs from "dayjs";
 import { query } from "../db.js";
@@ -10,7 +11,6 @@ import {
 
 const router = express.Router();
 
-/* ================= Helpers ================= */
 /* ================= Helpers ================= */
 function isValidEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
@@ -26,22 +26,21 @@ function toEmailNorm(s = "") {
     .trim()
     .toLowerCase();
 }
-// HH:mm + 15 min
-function addMinutes(hm, mins) {
+function addMin(hm, mins) {
   const [H, M] = (hm || "00:00").split(":").map(Number);
-  const t = dayjs()
+  return dayjs()
     .hour(H)
     .minute(M)
     .second(0)
     .millisecond(0)
-    .add(mins, "minute");
-  return t.format("HH:mm");
+    .add(mins, "minute")
+    .format("HH:mm");
 }
-function minutesBetween(startHHMM, endHHMM) {
-  if (!startHHMM || !endHHMM) return null;
-  const [sh, sm] = startHHMM.split(":").map(Number);
-  const [eh, em] = endHHMM.split(":").map(Number);
-  return eh * 60 + em - (sh * 60 + sm);
+function minutesBetween(a, b) {
+  if (!a || !b) return null;
+  const [ah, am] = a.split(":").map(Number);
+  const [bh, bm] = b.split(":").map(Number);
+  return bh * 60 + bm - (ah * 60 + am);
 }
 
 /* ================= Env limits ================= */
@@ -53,12 +52,11 @@ const LIMIT_SHIP_WEEK = Number(
 router.get("/availability", async (req, res) => {
   try {
     const { date, type } = req.query;
-    if (!date || !type) {
+    if (!date || !type)
       return res.status(400).json({ ok: false, error: "MISSING_PARAMS" });
-    }
-    if (!["TRYOUT", "PICKUP"].includes(type)) {
+    if (!["TRYOUT", "PICKUP"].includes(type))
       return res.status(400).json({ ok: false, error: "INVALID_TYPE" });
-    }
+
     const data = await getAvailability({ dbQuery: query, date, type });
     res.json({ ok: true, data });
   } catch (e) {
@@ -89,25 +87,6 @@ router.get("/shipping-options", async (req, res) => {
     return res.status(500).json({ ok: false, options: ["INTERRAPIDISIMO"] });
   }
 });
-
-/* ================= Create appointment ================= */
-/* ===== Helpers: reemplaza add15 por esto ===== */
-function addMinutes(hm, mins) {
-  const [H, M] = (hm || "00:00").split(":").map(Number);
-  const t = dayjs()
-    .hour(H)
-    .minute(M)
-    .second(0)
-    .millisecond(0)
-    .add(mins, "minute");
-  return t.format("HH:mm");
-}
-function minutesBetween(startHHMM, endHHMM) {
-  if (!startHHMM || !endHHMM) return null;
-  const [sh, sm] = startHHMM.split(":").map(Number);
-  const [eh, em] = endHHMM.split(":").map(Number);
-  return eh * 60 + em - (sh * 60 + sm);
-}
 
 /* ================= Create appointment ================= */
 router.post("/appointments", async (req, res) => {
@@ -156,41 +135,40 @@ router.post("/appointments", async (req, res) => {
     const phoneDigits = toDigits(customer_phone);
     const idDigits = toDigits(customer_id_number);
 
+    // -------- Reglas por tipo --------
     let finalStart = start_time || null;
     let finalEnd = null;
 
-    // -------- Reglas por tipo --------
     if (type_code === "TRYOUT" || type_code === "PICKUP") {
-      if (!start_time) {
+      if (!start_time)
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
-      }
 
-      // 1) Buscar ventana que CONTENGA el start_time
-      //    (inicio <= start  &&  end > start)  => estilo [start,end)
+      // Buscar la ventana que contenga el start_time: start <= t < end
       const winQ = await query(
-        `SELECT id,
-                to_char(start_time,'HH24:MI') AS s,
-                to_char(end_time,'HH24:MI')   AS e,
-                slot_minutes
-           FROM appt_windows
-          WHERE date=$1 AND type_code=$2
-            AND start_time <= $3::time
-            AND end_time   >  $3::time
-          ORDER BY start_time
-          LIMIT 1`,
+        `SELECT
+            to_char(start_time,'HH24:MI') AS s,
+            to_char(end_time,'HH24:MI')   AS e,
+            slot_minutes
+         FROM appt_windows
+        WHERE date=$1 AND type_code=$2
+          AND start_time <= $3::time
+          AND end_time   >  $3::time
+        ORDER BY start_time
+        LIMIT 1`,
         [date, type_code, start_time]
       );
       if (!winQ.rows.length) {
         return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
       }
-      const win = winQ.rows[0];
-      const slotMins = Number(win.slot_minutes);
 
-      // 2) Calcular end si no vino, usando slot_minutes de la ventana
+      const slotMins = Number(winQ.rows[0].slot_minutes);
+      const winEnd = winQ.rows[0].e;
+
+      // Si no vino end_time, calcularlo con el tamaño de bloque de la ventana
       finalStart = start_time;
-      finalEnd = end_time || addMinutes(start_time, slotMins);
+      finalEnd = end_time || addMin(start_time, slotMins);
 
-      // 3) Validar tamaño exacto del bloque
+      // Tamaño exacto del bloque
       const diff = minutesBetween(finalStart, finalEnd);
       if (diff !== slotMins) {
         return res.status(400).json({
@@ -200,12 +178,12 @@ router.post("/appointments", async (req, res) => {
         });
       }
 
-      // 4) Validar que finalEnd no se salga de la ventana
-      if (dayjs(`${date} ${finalEnd}`).isAfter(dayjs(`${date} ${win.e}`))) {
+      // No salirse de la ventana
+      if (dayjs(`${date} ${finalEnd}`).isAfter(dayjs(`${date} ${winEnd}`))) {
         return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
       }
 
-      // 5) Choque exacto del slot
+      // Choque exacto del slot
       const clash = await query(
         `SELECT 1 FROM appointments
           WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
@@ -233,19 +211,19 @@ router.post("/appointments", async (req, res) => {
 
     // ============= LIMITES ANTI-SPAM =============
     const sameDaySameType = await query(
-      `SELECT 1
-         FROM appointments
+      `SELECT 1 FROM appointments
         WHERE date = $1
           AND type_code = $2
           AND status <> 'CANCELLED'
           AND (
-              LOWER(customer_email) = $3
-           OR customer_phone = $4
-           OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
+            LOWER(customer_email) = $3
+            OR customer_phone = $4
+            OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
           )
         LIMIT 1`,
       [date, type_code, emailNorm, phoneDigits, idDigits || null]
     );
+
     if (sameDaySameType.rows.length) {
       return res.status(429).json({
         ok: false,
@@ -254,9 +232,11 @@ router.post("/appointments", async (req, res) => {
       });
     }
 
+    // Límite semanal para SHIPPING
     if (type_code === "SHIPPING") {
       const startOfWeek = dayjs(date).startOf("week").format("YYYY-MM-DD");
       const endOfWeek = dayjs(date).endOf("week").format("YYYY-MM-DD");
+
       const shipCount = await query(
         `SELECT COUNT(*)::int AS c
            FROM appointments
@@ -264,12 +244,13 @@ router.post("/appointments", async (req, res) => {
             AND status <> 'CANCELLED'
             AND date BETWEEN $1 AND $2
             AND (
-                LOWER(customer_email) = $3
-             OR customer_phone = $4
-             OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
+              LOWER(customer_email) = $3
+              OR customer_phone = $4
+              OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
             )`,
         [startOfWeek, endOfWeek, emailNorm, phoneDigits, idDigits || null]
       );
+
       if (shipCount.rows[0].c >= LIMIT_SHIP_WEEK) {
         return res.status(429).json({
           ok: false,
@@ -337,6 +318,7 @@ router.post("/appointments", async (req, res) => {
         status: "CONFIRMED",
       };
 
+      // Cliente
       const { subject, html, text } =
         buildConfirmationEmail(appointmentForEmail);
       const adminBcc = (process.env.MAIL_NOTIFY || "")
@@ -354,6 +336,7 @@ router.post("/appointments", async (req, res) => {
         });
       });
 
+      // Admin (copia)
       const adminTo =
         process.env.MAIL_NOTIFY ||
         process.env.ADMIN_NOTIFY ||
