@@ -27,17 +27,16 @@ function toEmailNorm(s = "") {
     .toLowerCase();
 }
 // HH:mm + 15 min
-function add15(hm) {
+function addMinutes(hm, mins) {
   const [H, M] = (hm || "00:00").split(":").map(Number);
   const t = dayjs()
     .hour(H)
     .minute(M)
     .second(0)
     .millisecond(0)
-    .add(15, "minute");
+    .add(mins, "minute");
   return t.format("HH:mm");
 }
-// diff en minutos entre "HH:MM" y "HH:MM"
 function minutesBetween(startHHMM, endHHMM) {
   if (!startHHMM || !endHHMM) return null;
   const [sh, sm] = startHHMM.split(":").map(Number);
@@ -92,13 +91,32 @@ router.get("/shipping-options", async (req, res) => {
 });
 
 /* ================= Create appointment ================= */
+/* ===== Helpers: reemplaza add15 por esto ===== */
+function addMinutes(hm, mins) {
+  const [H, M] = (hm || "00:00").split(":").map(Number);
+  const t = dayjs()
+    .hour(H)
+    .minute(M)
+    .second(0)
+    .millisecond(0)
+    .add(mins, "minute");
+  return t.format("HH:mm");
+}
+function minutesBetween(startHHMM, endHHMM) {
+  if (!startHHMM || !endHHMM) return null;
+  const [sh, sm] = startHHMM.split(":").map(Number);
+  const [eh, em] = endHHMM.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+
+/* ================= Create appointment ================= */
 router.post("/appointments", async (req, res) => {
   try {
     const {
       type_code, // TRYOUT | PICKUP | SHIPPING
       date, // YYYY-MM-DD
       start_time, // HH:MM
-      end_time, // <-- opcional (si viene, se respeta)
+      end_time, // opcional
       product,
       customer_name,
       customer_email,
@@ -133,35 +151,66 @@ router.post("/appointments", async (req, res) => {
       return res.status(400).json({ ok: false, error: "INVALID_ID" });
     }
 
-    // Normalizaciones para comparación/almacenamiento
+    // Normalizaciones
     const emailNorm = toEmailNorm(customer_email);
     const phoneDigits = toDigits(customer_phone);
     const idDigits = toDigits(customer_id_number);
 
-    // -------- Reglas por tipo --------
     let finalStart = start_time || null;
     let finalEnd = null;
 
+    // -------- Reglas por tipo --------
     if (type_code === "TRYOUT" || type_code === "PICKUP") {
       if (!start_time) {
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
       }
 
-      // si viene end_time, úsalo; si no, +15
-      finalEnd = end_time || add15(start_time);
+      // 1) Buscar ventana que CONTENGA el start_time
+      //    (inicio <= start  &&  end > start)  => estilo [start,end)
+      const winQ = await query(
+        `SELECT id,
+                to_char(start_time,'HH24:MI') AS s,
+                to_char(end_time,'HH24:MI')   AS e,
+                slot_minutes
+           FROM appt_windows
+          WHERE date=$1 AND type_code=$2
+            AND start_time <= $3::time
+            AND end_time   >  $3::time
+          ORDER BY start_time
+          LIMIT 1`,
+        [date, type_code, start_time]
+      );
+      if (!winQ.rows.length) {
+        return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
+      }
+      const win = winQ.rows[0];
+      const slotMins = Number(win.slot_minutes);
 
-      // validar rango
+      // 2) Calcular end si no vino, usando slot_minutes de la ventana
+      finalStart = start_time;
+      finalEnd = end_time || addMinutes(start_time, slotMins);
+
+      // 3) Validar tamaño exacto del bloque
       const diff = minutesBetween(finalStart, finalEnd);
-      if (diff == null || diff <= 0) {
-        return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+      if (diff !== slotMins) {
+        return res.status(400).json({
+          ok: false,
+          error: "INVALID_SLOT_SIZE",
+          meta: { expected: slotMins, got: diff },
+        });
       }
 
-      // choque exacto del slot (start y end iguales)
+      // 4) Validar que finalEnd no se salga de la ventana
+      if (dayjs(`${date} ${finalEnd}`).isAfter(dayjs(`${date} ${win.e}`))) {
+        return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
+      }
+
+      // 5) Choque exacto del slot
       const clash = await query(
         `SELECT 1 FROM appointments
-         WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
-           AND start_time=$3 AND end_time=$4
-         LIMIT 1`,
+          WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
+            AND start_time=$3 AND end_time=$4
+          LIMIT 1`,
         [type_code, date, finalStart, finalEnd]
       );
       if (clash.rows.length) {
@@ -184,21 +233,19 @@ router.post("/appointments", async (req, res) => {
 
     // ============= LIMITES ANTI-SPAM =============
     const sameDaySameType = await query(
-      `
-      SELECT 1 FROM appointments
-      WHERE date = $1
-        AND type_code = $2
-        AND status <> 'CANCELLED'
-        AND (
-          LOWER(customer_email) = $3
-          OR customer_phone = $4
-          OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
-        )
-      LIMIT 1
-      `,
+      `SELECT 1
+         FROM appointments
+        WHERE date = $1
+          AND type_code = $2
+          AND status <> 'CANCELLED'
+          AND (
+              LOWER(customer_email) = $3
+           OR customer_phone = $4
+           OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
+          )
+        LIMIT 1`,
       [date, type_code, emailNorm, phoneDigits, idDigits || null]
     );
-
     if (sameDaySameType.rows.length) {
       return res.status(429).json({
         ok: false,
@@ -207,27 +254,22 @@ router.post("/appointments", async (req, res) => {
       });
     }
 
-    // Límite semanal para SHIPPING
     if (type_code === "SHIPPING") {
       const startOfWeek = dayjs(date).startOf("week").format("YYYY-MM-DD");
       const endOfWeek = dayjs(date).endOf("week").format("YYYY-MM-DD");
-
       const shipCount = await query(
-        `
-        SELECT COUNT(*)::int AS c
-        FROM appointments
-        WHERE type_code='SHIPPING'
-          AND status <> 'CANCELLED'
-          AND date BETWEEN $1 AND $2
-          AND (
-            LOWER(customer_email) = $3
-            OR customer_phone = $4
-            OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
-          )
-        `,
+        `SELECT COUNT(*)::int AS c
+           FROM appointments
+          WHERE type_code='SHIPPING'
+            AND status <> 'CANCELLED'
+            AND date BETWEEN $1 AND $2
+            AND (
+                LOWER(customer_email) = $3
+             OR customer_phone = $4
+             OR (customer_id_number IS NOT NULL AND customer_id_number = $5)
+            )`,
         [startOfWeek, endOfWeek, emailNorm, phoneDigits, idDigits || null]
       );
-
       if (shipCount.rows[0].c >= LIMIT_SHIP_WEEK) {
         return res.status(429).json({
           ok: false,
@@ -278,7 +320,7 @@ router.post("/appointments", async (req, res) => {
         date,
         start_time: finalStart,
         end_time: finalEnd,
-        minutes, // <- para las plantillas dinámicas
+        minutes,
         product,
         customer_name,
         customer_email: emailNorm,
@@ -295,7 +337,6 @@ router.post("/appointments", async (req, res) => {
         status: "CONFIRMED",
       };
 
-      // 1) Cliente
       const { subject, html, text } =
         buildConfirmationEmail(appointmentForEmail);
       const adminBcc = (process.env.MAIL_NOTIFY || "")
@@ -313,7 +354,6 @@ router.post("/appointments", async (req, res) => {
         });
       });
 
-      // 2) Admin (copia)
       const adminTo =
         process.env.MAIL_NOTIFY ||
         process.env.ADMIN_NOTIFY ||

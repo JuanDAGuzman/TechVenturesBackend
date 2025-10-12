@@ -164,3 +164,18 @@ ALTER TABLE appointments ADD COLUMN slot_minutes integer;
 UPDATE appointments
 SET slot_minutes = EXTRACT(EPOCH FROM (end_time - start_time))/60
 WHERE start_time IS NOT NULL AND end_time IS NOT NULL;
+
+-- Ventanas manuales de disponibilidad
+CREATE TABLE IF NOT EXISTS appt_windows (
+  id SERIAL PRIMARY KEY,
+  date DATE NOT NULL,
+  type_code TEXT NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL,
+  slot_minutes INT NOT NULL CHECK (slot_minutes IN (15,20,30)),
+  created_at TIMESTAMP DEFAULT now(),
+  CONSTRAINT appt_windows_time_valid CHECK (end_time > start_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_appt_windows_date_type
+  ON appt_windows(date, type_code);

@@ -44,9 +44,15 @@ const upload = multer({
   },
 });
 
-/* ───────────────────────────
-   Auth admin por header x-admin-token
-   ─────────────────────────── */
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  // (a.start < b.end) && (b.start < a.end)
+  return aStart < bEnd && bStart < aEnd;
+}
+function isSlotSize(n) {
+  return [15, 20, 30].includes(Number(n));
+}
+
+/* Ventanas L-V */
 router.use((req, res, next) => {
   const token = req.headers["x-admin-token"];
   if (token !== process.env.ADMIN_TOKEN) {
@@ -54,6 +60,128 @@ router.use((req, res, next) => {
   }
   next();
 });
+
+// === CREAR ventana ===
+router.post("/windows", async (req, res) => {
+  try {
+    const { date, type_code, start_time, end_time, slot_minutes } =
+      req.body || {};
+    if (!date || !type_code || !start_time || !end_time || !slot_minutes)
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    if (!["TRYOUT", "PICKUP"].includes(type_code))
+      return res.status(400).json({ ok: false, error: "INVALID_TYPE" });
+    if (!isSlotSize(slot_minutes))
+      return res.status(400).json({ ok: false, error: "INVALID_SLOT_SIZE" });
+    if (minutesBetween(start_time, end_time) <= 0)
+      return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+
+    // Evitar solapes con otras ventanas del mismo día/tipo
+    const existing = await query(
+      `SELECT id, start_time, end_time
+       FROM appt_windows WHERE date=$1 AND type_code=$2`,
+      [date, type_code]
+    );
+    const clash = existing.rows.find((w) =>
+      overlaps(start_time, end_time, w.start_time, w.end_time)
+    );
+    if (clash)
+      return res
+        .status(409)
+        .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
+
+    // Insert
+    const ins = await query(
+      `INSERT INTO appt_windows(date,type_code,start_time,end_time,slot_minutes)
+       VALUES($1,$2,$3,$4,$5) RETURNING id`,
+      [date, type_code, start_time, end_time, slot_minutes]
+    );
+    return res.json({ ok: true, id: ins.rows[0].id });
+  } catch (e) {
+    console.error("[admin/windows POST]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// === EDITAR ventana ===
+router.patch("/windows/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { start_time, end_time, slot_minutes } = req.body || {};
+    const cur = await query(`SELECT * FROM appt_windows WHERE id=$1`, [id]);
+    if (!cur.rows.length)
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+
+    const row = cur.rows[0];
+    const st = start_time || row.start_time;
+    const en = end_time || row.end_time;
+    const sm = slot_minutes != null ? Number(slot_minutes) : row.slot_minutes;
+
+    if (!isSlotSize(sm))
+      return res.status(400).json({ ok: false, error: "INVALID_SLOT_SIZE" });
+    if (minutesBetween(st, en) <= 0)
+      return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+
+    // solape contra otras ventanas del mismo día/tipo (excluyendo la propia)
+    const others = await query(
+      `SELECT id, start_time, end_time
+       FROM appt_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
+      [row.date, row.type_code, id]
+    );
+    const clash = others.rows.find((w) =>
+      overlaps(st, en, w.start_time, w.end_time)
+    );
+    if (clash)
+      return res
+        .status(409)
+        .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
+
+    await query(
+      `UPDATE appt_windows
+         SET start_time=$1, end_time=$2, slot_minutes=$3
+       WHERE id=$4`,
+      [st, en, sm, id]
+    );
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[admin/windows PATCH]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// === ELIMINAR ventana ===
+router.delete("/windows/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const del = await query(`DELETE FROM appt_windows WHERE id=$1`, [id]);
+    // (del.rowCount===0) -> no existía
+    return res.json({ ok: true, removed: del.rowCount });
+  } catch (e) {
+    console.error("[admin/windows DELETE]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// === Listar ventanas por día/tipo (para el panel) ===
+router.get("/windows", async (req, res) => {
+  try {
+    const { date, type } = req.query;
+    if (!date)
+      return res.status(400).json({ ok: false, error: "MISSING_DATE" });
+    const rows = await query(
+      `SELECT * FROM appt_windows WHERE date=$1 AND ($2::text IS NULL OR type_code=$2)
+       ORDER BY start_time`,
+      [date, type || null]
+    );
+    return res.json({ ok: true, rows: rows.rows });
+  } catch (e) {
+    console.error("[admin/windows GET]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+/* ───────────────────────────
+   Auth admin por header x-admin-token
+   ─────────────────────────── */
 
 /* ───────────────────────────
    GET /api/admin/appointments?date=YYYY-MM-DD
@@ -413,7 +541,7 @@ router.delete("/appointments", async (req, res) => {
       return res.status(400).json({ ok: false, error: "INVALID_IDS" });
     }
     await query("BEGIN");
-    await query(`DELETE FROM appointments WHERE id = ANY($1::uuid[])`, [ids]);
+    await query(`DELETE FROM appointments WHERE id = ANY($1::int[])`, [ids]);
     await query("COMMIT");
     return res.json({ ok: true, deleted: ids.length });
   } catch (err) {
@@ -576,12 +704,12 @@ router.get("/weekday-windows", async (req, res) => {
     const params = [date];
     let sql = `
       SELECT id,
-             type_code,
-             to_char(start_time,'HH24:MI') AS start,
-             to_char(end_time,'HH24:MI')   AS end
+        SELECT id, type_code,
+          to_char(start_time,'HH24:MI') AS start,
+          to_char(end_time,'HH24:MI')   AS end,
+        slot_minutes
         FROM weekday_windows
        WHERE date=$1`;
-
     if (type) {
       sql += ` AND type_code=$2`;
       params.push(type);
