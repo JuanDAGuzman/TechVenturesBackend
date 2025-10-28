@@ -19,28 +19,41 @@ function addMin(hhmm, mins) {
 }
 
 function slotsFromWindow({ start_time, end_time, slot_minutes }) {
-  const out = [];
-  let cursor = start_time;
+  const slots = [];
+  let s = start_time;
+
 
   while (true) {
-    const next = addMin(cursor, slot_minutes);
+    const e = addMin(s, slot_minutes);
 
-    if (minutesBetween(next, end_time) > 0) {
-      out.push({ start: cursor, end: next });
-      cursor = next;
+    if (minutesBetween(e, end_time) > 0) {
+      slots.push({ start: s, end: e });
+      s = e;
       continue;
     }
 
-    if (minutesBetween(cursor, end_time) === slot_minutes) {
-      out.push({ start: cursor, end: end_time });
+    if (minutesBetween(s, end_time) === slot_minutes) {
+      slots.push({ start: s, end: end_time });
     }
-
     break;
   }
 
-  return out;
+  return slots;
 }
 
+/**
+ * Disponibilidad basada en appt_windows
+ *
+ * - Para una fecha y type_code (TRYOUT | PICKUP), buscamos TODAS las ventanas abiertas
+ *   en appt_windows.
+ * - Para cada ventana, partimos en bloques del tamaño elegido (15/20/30).
+ * - Filtramos los bloques que ya tienen cita CONFIRMED en appointments.
+ *
+ * @param {Object} params
+ * @param {(q: string, params?: any[]) => Promise<any>} params.dbQuery
+ * @param {string} params.date YYYY-MM-DD
+ * @param {('TRYOUT'|'PICKUP')} params.type
+ */
 export async function getAvailability({ dbQuery, date, type }) {
   const { rows: wins } = await dbQuery(
     `SELECT
@@ -48,8 +61,7 @@ export async function getAvailability({ dbQuery, date, type }) {
         to_char(end_time,'HH24:MI')   AS end_time,
         slot_minutes
      FROM appt_windows
-     WHERE date = $1
-       AND type_code = $2
+     WHERE date = $1 AND type_code = $2
      ORDER BY start_time ASC`,
     [date, type]
   );
@@ -58,19 +70,15 @@ export async function getAvailability({ dbQuery, date, type }) {
     return { date, slots: [] };
   }
 
-  let generated = [];
-  for (const w of wins) {
-    const mins = Number(w.slot_minutes);
-    generated = generated.concat(
-      slotsFromWindow({
-        start_time: w.start_time,
-        end_time: w.end_time,
-        slot_minutes: mins,
-      })
-    );
-  }
+  const allSlots = wins.flatMap((w) =>
+    slotsFromWindow({
+      start_time: w.start_time,
+      end_time: w.end_time,
+      slot_minutes: Number(w.slot_minutes),
+    })
+  );
 
-  if (!generated.length) {
+  if (!allSlots.length) {
     return { date, slots: [] };
   }
 
@@ -81,35 +89,24 @@ export async function getAvailability({ dbQuery, date, type }) {
      FROM appointments
      WHERE date = $1
        AND type_code = $2
-       AND status <> 'CANCELLED'
+       AND status = 'CONFIRMED'
        AND start_time IS NOT NULL
        AND end_time   IS NOT NULL`,
     [date, type]
   );
 
-  const busyKeys = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
+  const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
-  const dedup = new Set();
-  const available = [];
-  for (const s of generated) {
+  const out = [];
+  const seen = new Set();
+
+  for (const s of allSlots) {
     const k = `${s.start}-${s.end}`;
-    if (busyKeys.has(k)) continue;
-    if (dedup.has(k)) continue;
-    dedup.add(k);
-    available.push(s);
+    if (!busy.has(k) && !seen.has(k)) {
+      seen.add(k);
+      out.push(s);
+    }
   }
 
-  const todayStr = dayjs().format("YYYY-MM-DD");
-  let finalSlots = available;
-
-  if (date === todayStr) {
-    const nowHHMM = dayjs().format("HH:mm");
-    finalSlots = available.filter((slot) => slot.end > nowHHMM);
-  }
-
-  finalSlots.sort((a, b) =>
-    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
-  );
-
-  return { date, slots: finalSlots };
+  return { date, slots: out };
 }
