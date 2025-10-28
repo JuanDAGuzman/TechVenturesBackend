@@ -18,6 +18,7 @@ function addMin(hhmm, mins) {
   return d.format("HH:mm");
 }
 
+
 function slotsFromWindow({ start_time, end_time, slot_minutes }) {
   const slots = [];
   let s = start_time;
@@ -45,8 +46,9 @@ function slotsFromWindow({ start_time, end_time, slot_minutes }) {
  *
  * - Para una fecha y type_code (TRYOUT | PICKUP), buscamos TODAS las ventanas abiertas
  *   en appt_windows.
- * - Para cada ventana, partimos en bloques del tamaño elegido (15/20/30).
- * - Filtramos los bloques que ya tienen cita CONFIRMED en appointments.
+ * - Para cada ventana, partimos en bloques del tamaño elegido (15 / 20 / 30) SIN inventar otros.
+ * - Quitamos bloques que ya tienen cita (CONFIRMED o DONE o SHIPPED, o sea cualquier cosa que
+ *   no esté CANCELLED).
  *
  * @param {Object} params
  * @param {(q: string, params?: any[]) => Promise<any>} params.dbQuery
@@ -83,21 +85,21 @@ export async function getAvailability({ dbQuery, date, type }) {
 
   const { rows: taken } = await dbQuery(
     `SELECT
-      to_char(start_time,'HH24:MI') AS start_time,
-      to_char(end_time,'HH24:MI')   AS end_time
-   FROM appointments
-   WHERE date = $1
-     AND type_code = $2
-     AND status <> 'CANCELLED'
-     AND start_time IS NOT NULL
-     AND end_time   IS NOT NULL`,
+        to_char(start_time,'HH24:MI') AS start_time,
+        to_char(end_time,'HH24:MI')   AS end_time
+     FROM appointments
+     WHERE date = $1
+       AND type_code = $2
+       AND status <> 'CANCELLED'
+       AND start_time IS NOT NULL
+       AND end_time   IS NOT NULL`,
     [date, type]
   );
+
   const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
   const out = [];
   const seen = new Set();
-
   for (const s of allSlots) {
     const k = `${s.start}-${s.end}`;
     if (!busy.has(k) && !seen.has(k)) {
