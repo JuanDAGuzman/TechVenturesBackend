@@ -1,6 +1,5 @@
 import dayjs from "dayjs";
 
-
 function minutesBetween(a, b) {
   if (!a || !b) return null;
   const [ah, am] = a.split(":").map(Number);
@@ -18,7 +17,6 @@ function addMin(hhmm, mins) {
     .add(mins, "minute");
   return d.format("HH:mm");
 }
-
 
 function slotsFromWindow({ start_time, end_time, slot_minutes }) {
   const slots = [];
@@ -99,15 +97,34 @@ export async function getAvailability({ dbQuery, date, type }) {
 
   const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
-  const out = [];
-  const seen = new Set();
-  for (const s of allSlots) {
-    const k = `${s.start}-${s.end}`;
-    if (!busy.has(k) && !seen.has(k)) {
-      seen.add(k);
-      out.push(s);
+  const finalSlots = [];
+
+  for (const w of wins) {
+    const parts = slotsFromWindow({
+      start_time: w.start_time,
+      end_time: w.end_time,
+      slot_minutes: Number(w.slot_minutes),
+    });
+
+    const allFree = parts.every((p) => !busy.has(`${p.start}-${p.end}`));
+
+    if (allFree && parts.length > 0) {
+      finalSlots.push({
+        start: w.start_time,
+        end: w.end_time,
+      });
     }
   }
 
-  return { date, slots: out };
+  const uniq = [];
+  const seen2 = new Set();
+  for (const s of finalSlots) {
+    const k = `${s.start}-${s.end}`;
+    if (!seen2.has(k)) {
+      seen2.add(k);
+      uniq.push(s);
+    }
+  }
+
+  return { date, slots: uniq };
 }
