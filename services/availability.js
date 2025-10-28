@@ -22,7 +22,6 @@ function slotsFromWindow({ start_time, end_time, slot_minutes }) {
   const slots = [];
   let s = start_time;
 
-
   while (true) {
     const e = addMin(s, slot_minutes);
 
@@ -84,17 +83,16 @@ export async function getAvailability({ dbQuery, date, type }) {
 
   const { rows: taken } = await dbQuery(
     `SELECT
-        to_char(start_time,'HH24:MI') AS start_time,
-        to_char(end_time,'HH24:MI')   AS end_time
-     FROM appointments
-     WHERE date = $1
-       AND type_code = $2
-       AND status = 'CONFIRMED'
-       AND start_time IS NOT NULL
-       AND end_time   IS NOT NULL`,
+      to_char(start_time,'HH24:MI') AS start_time,
+      to_char(end_time,'HH24:MI')   AS end_time
+   FROM appointments
+   WHERE date = $1
+     AND type_code = $2
+     AND status <> 'CANCELLED'
+     AND start_time IS NOT NULL
+     AND end_time   IS NOT NULL`,
     [date, type]
   );
-
   const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
   const out = [];
