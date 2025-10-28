@@ -10,6 +10,7 @@ pnpm-debug.log*
 .env.compose
 .env.*
 !.env.example
+get-refresh.js
 
 # build / misc
 dist/

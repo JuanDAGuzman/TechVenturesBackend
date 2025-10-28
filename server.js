@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -22,28 +21,27 @@ dotenv.config();
 
 const app = express();
 
-/* ───────── Base ───────── */
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* ───────── CORS ───────── */
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin: function (origin, cb) {
-      if (!origin) return cb(null, true); // curl / same-origin
-      const ok = allowedOrigins.length === 0 || allowedOrigins.includes(origin);
-      cb(ok ? null : new Error("CORS_NOT_ALLOWED"), ok);
-    },
-  })
-);
+const corsConfig = {
+  origin: function (origin, cb) {
+    if (!origin) return cb(null, true);
+    const ok = allowedOrigins.length === 0 || allowedOrigins.includes(origin);
+    cb(ok ? null : new Error("CORS_NOT_ALLOWED"), ok);
+  },
+  credentials: true,
+};
 
-/* ───────── Rate limits ───────── */
+app.use(cors(corsConfig));
+app.options("*", cors(corsConfig));
+
 const createApptIpLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 2,
@@ -78,7 +76,6 @@ const adminBruteforceLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
-/* ───────── Auth admin ───────── */
 function requireAdmin(req, res, next) {
   const token = (req.headers["x-admin-token"] || "").trim();
   const expected = (process.env.ADMIN_TOKEN || "").trim();
@@ -88,7 +85,6 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-/* ───────── Rutas ───────── */
 const apiRouter = express.Router();
 apiRouter.post("/appointments", createApptIpLimiter, createApptLimiter);
 apiRouter.use(publicRoutes);
@@ -97,11 +93,9 @@ app.use("/api", apiRouter);
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 app.use("/diag", diagnostics);
 
-/* ───────── Health ───────── */
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-/* ───────── 404 & Error handler ───────── */
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 app.use((err, _req, res, _next) => {
   const msg = err?.message || "INTERNAL_ERROR";
@@ -111,7 +105,6 @@ app.use((err, _req, res, _next) => {
     .json({ ok: false, error: msg });
 });
 
-/* ───────── Helpers de init de DB (idempotentes) ───────── */
 async function applySchemaIdempotent() {
   const ddlPath = new URL("./sql/schema.sql", import.meta.url);
   const ddl = fs.readFileSync(ddlPath, "utf8");
@@ -145,18 +138,15 @@ async function ensureAppointmentsMinutesColumn() {
   `);
 }
 
-/* ───────── Arranque ───────── */
 const PORT = Number(process.env.PORT || 4000);
 
 (async () => {
   try {
-    // ▶️ Ejecuta migraciones SOLO si lo pides (ahorra compute en Neon)
     if (process.env.APPLY_SCHEMA_ON_BOOT === "1") {
       await applySchemaIdempotent();
       await ensureAppointmentsMinutesColumn();
     }
 
-    // Verifica SMTP pero NO bloquea
     verifySMTP().catch(() => {});
 
     const server = http.createServer(app);
@@ -165,7 +155,7 @@ const PORT = Number(process.env.PORT || 4000);
     server.keepAliveTimeout = 10_000;
 
     server.listen(PORT, "0.0.0.0", () => {
-      console.log(`API running on http://0.0.0.0:${PORT}`);
+      console.log(`✅ API running on http://0.0.0.0:${PORT}`);
     });
   } catch (e) {
     console.error("DB init error", e);
@@ -173,5 +163,4 @@ const PORT = Number(process.env.PORT || 4000);
   }
 })();
 
-// Worker de recordatorios
 startRemindersWorker();
