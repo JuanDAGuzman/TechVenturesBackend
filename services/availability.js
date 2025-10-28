@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 
+/* ───────── Helpers ───────── */
 function minutesBetween(a, b) {
   if (!a || !b) return null;
   const [ah, am] = a.split(":").map(Number);
@@ -30,11 +31,13 @@ function slotsFromWindow({ start_time, end_time, slot_minutes }) {
       s = e;
       continue;
     }
+
     if (minutesBetween(s, end_time) === slot_minutes) {
       slots.push({ start: s, end: end_time });
     }
     break;
   }
+
   return slots;
 }
 
@@ -73,31 +76,32 @@ export async function getAvailability({ dbQuery, date, type }) {
      FROM appointments
      WHERE date = $1
        AND type_code = $2
-       AND status IN ('CONFIRMED', 'ATENDIDA', 'ENVIADA')
+       AND status <> 'CANCELLED'
        AND start_time IS NOT NULL
        AND end_time   IS NOT NULL`,
     [date, type]
   );
+
   const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
   const out = [];
   const seen = new Set();
+
   for (const s of all) {
-    const k = `${s.start}-${s.end}`;
-    if (!busy.has(k) && !seen.has(k)) {
-      seen.add(k);
+    const key = `${s.start}-${s.end}`;
+    if (!busy.has(key) && !seen.has(key)) {
+      seen.add(key);
       out.push(s);
     }
   }
 
   const today = dayjs().format("YYYY-MM-DD");
+  let finalSlots = out;
+
   if (date === today) {
     const now = dayjs().format("HH:mm");
-    return {
-      date,
-      slots: out.filter((s) => s.end > now),
-    };
+    finalSlots = out.filter((slot) => slot.end > now);
   }
 
-  return { date, slots: out };
+  return { date, slots: finalSlots };
 }
