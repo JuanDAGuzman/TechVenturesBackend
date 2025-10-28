@@ -1,6 +1,5 @@
 import dayjs from "dayjs";
 
-/* ───────── Helpers ───────── */
 function minutesBetween(a, b) {
   if (!a || !b) return null;
   const [ah, am] = a.split(":").map(Number);
@@ -20,25 +19,26 @@ function addMin(hhmm, mins) {
 }
 
 function slotsFromWindow({ start_time, end_time, slot_minutes }) {
-  const slots = [];
-  let s = start_time;
+  const out = [];
+  let cursor = start_time;
 
   while (true) {
-    const e = addMin(s, slot_minutes);
+    const next = addMin(cursor, slot_minutes);
 
-    if (minutesBetween(e, end_time) > 0) {
-      slots.push({ start: s, end: e });
-      s = e;
+    if (minutesBetween(next, end_time) > 0) {
+      out.push({ start: cursor, end: next });
+      cursor = next;
       continue;
     }
 
-    if (minutesBetween(s, end_time) === slot_minutes) {
-      slots.push({ start: s, end: end_time });
+    if (minutesBetween(cursor, end_time) === slot_minutes) {
+      out.push({ start: cursor, end: end_time });
     }
+
     break;
   }
 
-  return slots;
+  return out;
 }
 
 export async function getAvailability({ dbQuery, date, type }) {
@@ -48,7 +48,8 @@ export async function getAvailability({ dbQuery, date, type }) {
         to_char(end_time,'HH24:MI')   AS end_time,
         slot_minutes
      FROM appt_windows
-     WHERE date = $1 AND type_code = $2
+     WHERE date = $1
+       AND type_code = $2
      ORDER BY start_time ASC`,
     [date, type]
   );
@@ -57,15 +58,19 @@ export async function getAvailability({ dbQuery, date, type }) {
     return { date, slots: [] };
   }
 
-  const all = wins.flatMap((w) =>
-    slotsFromWindow({
-      start_time: w.start_time,
-      end_time: w.end_time,
-      slot_minutes: Number(w.slot_minutes),
-    })
-  );
+  let generated = [];
+  for (const w of wins) {
+    const mins = Number(w.slot_minutes);
+    generated = generated.concat(
+      slotsFromWindow({
+        start_time: w.start_time,
+        end_time: w.end_time,
+        slot_minutes: mins,
+      })
+    );
+  }
 
-  if (!all.length) {
+  if (!generated.length) {
     return { date, slots: [] };
   }
 
@@ -82,26 +87,29 @@ export async function getAvailability({ dbQuery, date, type }) {
     [date, type]
   );
 
-  const busy = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
+  const busyKeys = new Set(taken.map((t) => `${t.start_time}-${t.end_time}`));
 
-  const out = [];
-  const seen = new Set();
-
-  for (const s of all) {
-    const key = `${s.start}-${s.end}`;
-    if (!busy.has(key) && !seen.has(key)) {
-      seen.add(key);
-      out.push(s);
-    }
+  const dedup = new Set();
+  const available = [];
+  for (const s of generated) {
+    const k = `${s.start}-${s.end}`;
+    if (busyKeys.has(k)) continue;
+    if (dedup.has(k)) continue;
+    dedup.add(k);
+    available.push(s);
   }
 
-  const today = dayjs().format("YYYY-MM-DD");
-  let finalSlots = out;
+  const todayStr = dayjs().format("YYYY-MM-DD");
+  let finalSlots = available;
 
-  if (date === today) {
-    const now = dayjs().format("HH:mm");
-    finalSlots = out.filter((slot) => slot.end > now);
+  if (date === todayStr) {
+    const nowHHMM = dayjs().format("HH:mm");
+    finalSlots = available.filter((slot) => slot.end > nowHHMM);
   }
+
+  finalSlots.sort((a, b) =>
+    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
+  );
 
   return { date, slots: finalSlots };
 }
