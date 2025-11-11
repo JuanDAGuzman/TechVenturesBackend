@@ -97,7 +97,7 @@ router.post("/appointments/:id/upload-guide", async (req, res) => {
 router.post("/windows", async (req, res) => {
   try {
     const { date, type_code, start_time, end_time } = req.body || {};
-    const slot_minutes = req.body.slot_minutes ?? 15; 
+    const slot_minutes = req.body.slot_minutes ?? 15;
 
     if (!date || !type_code || !start_time || !end_time)
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
@@ -110,7 +110,7 @@ router.post("/windows", async (req, res) => {
 
     const existing = await query(
       `SELECT id, start_time, end_time
-       FROM appt_windows WHERE date=$1 AND type_code=$2`,
+   FROM weekday_windows WHERE date=$1 AND type_code=$2`,
       [date, type_code]
     );
     const clash = existing.rows.find((w) =>
@@ -122,9 +122,9 @@ router.post("/windows", async (req, res) => {
         .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
 
     const ins = await query(
-      `INSERT INTO appt_windows(date,type_code,start_time,end_time,slot_minutes)
-       VALUES($1,$2,$3,$4,$5) RETURNING id`,
-      [date, type_code, start_time, end_time, slot_minutes]
+      `INSERT INTO weekday_windows(date,type_code,start_time,end_time,created_by,slot_minutes)
+   VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [date, type_code, start_time, end_time, "admin", slot_minutes]
     );
     return res.json({ ok: true, id: ins.rows[0].id });
   } catch (e) {
@@ -137,7 +137,7 @@ router.patch("/windows/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { start_time, end_time, slot_minutes } = req.body || {};
-    const cur = await query(`SELECT * FROM appt_windows WHERE id=$1`, [id]);
+    const cur = await query(`SELECT * FROM weekday_windows WHERE id=$1`, [id]);
     if (!cur.rows.length)
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
 
@@ -153,7 +153,7 @@ router.patch("/windows/:id", async (req, res) => {
 
     const others = await query(
       `SELECT id, start_time, end_time
-       FROM appt_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
+   FROM weekday_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
       [row.date, row.type_code, id]
     );
     const clash = others.rows.find((w) =>
@@ -165,9 +165,9 @@ router.patch("/windows/:id", async (req, res) => {
         .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
 
     await query(
-      `UPDATE appt_windows
-         SET start_time=$1, end_time=$2, slot_minutes=$3
-       WHERE id=$4`,
+      `UPDATE weekday_windows
+     SET start_time=$1, end_time=$2, slot_minutes=$3
+   WHERE id=$4`,
       [st, en, sm, id]
     );
     return res.json({ ok: true });
@@ -180,7 +180,7 @@ router.patch("/windows/:id", async (req, res) => {
 router.delete("/windows/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const del = await query(`DELETE FROM appt_windows WHERE id=$1`, [id]);
+    const del = await query(`DELETE FROM weekday_windows WHERE id=$1`, [id]);
     return res.json({ ok: true, removed: del.rowCount });
   } catch (e) {
     console.error("[admin/windows DELETE]", e);
@@ -194,8 +194,8 @@ router.get("/windows", async (req, res) => {
     if (!date)
       return res.status(400).json({ ok: false, error: "MISSING_DATE" });
     const rows = await query(
-      `SELECT * FROM appt_windows WHERE date=$1 AND ($2::text IS NULL OR type_code=$2)
-       ORDER BY start_time`,
+      `SELECT * FROM weekday_windows WHERE date=$1 AND ($2::text IS NULL OR type_code=$2)
+   ORDER BY start_time`,
       [date, type || null]
     );
     return res.json({ ok: true, rows: rows.rows });
