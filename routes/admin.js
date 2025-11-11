@@ -1,4 +1,3 @@
-// services/admin.js (o routes/admin.js)
 import express from "express";
 import { query } from "../db.js";
 
