@@ -41,10 +41,10 @@ function slotsFromWindow({ start_time, end_time, slot_minutes }) {
 }
 
 /**
- * Disponibilidad basada en appt_windows
+ * Disponibilidad basada en weekday_windows y saturday_windows
  *
  * - Para una fecha y type_code (TRYOUT | PICKUP), buscamos TODAS las ventanas abiertas
- *   en appt_windows.
+ *   en weekday_windows o saturday_windows según el día de la semana.
  * - Para cada ventana, partimos en bloques del tamaño elegido (15 / 20 / 30) SIN inventar otros.
  * - Quitamos bloques que ya tienen cita (CONFIRMED o DONE o SHIPPED, o sea cualquier cosa que
  *   no esté CANCELLED).
@@ -55,16 +55,38 @@ function slotsFromWindow({ start_time, end_time, slot_minutes }) {
  * @param {('TRYOUT'|'PICKUP')} params.type
  */
 export async function getAvailability({ dbQuery, date, type }) {
-  const { rows: wins } = await dbQuery(
-    `SELECT
-        to_char(start_time,'HH24:MI') AS start_time,
-        to_char(end_time,'HH24:MI')   AS end_time,
-        slot_minutes
-     FROM appt_windows
-     WHERE date = $1 AND type_code = $2
-     ORDER BY start_time ASC`,
-    [date, type]
-  );
+  const dayOfWeek = dayjs(date).day();
+  const isSaturday = dayOfWeek === 6;
+
+  let wins = [];
+
+  // 🔥 Si es sábado, buscar en saturday_windows
+  if (isSaturday) {
+    const { rows } = await dbQuery(
+      `SELECT
+          to_char(start_time,'HH24:MI') AS start_time,
+          to_char(end_time,'HH24:MI')   AS end_time,
+          slot_minutes
+       FROM saturday_windows
+       WHERE date = $1
+       ORDER BY start_time ASC`,
+      [date]
+    );
+    wins = rows;
+  } else {
+    // 🔥 Si es entre lunes y viernes, buscar en weekday_windows
+    const { rows } = await dbQuery(
+      `SELECT
+          to_char(start_time,'HH24:MI') AS start_time,
+          to_char(end_time,'HH24:MI')   AS end_time,
+          slot_minutes
+       FROM weekday_windows
+       WHERE date = $1 AND type_code = $2
+       ORDER BY start_time ASC`,
+      [date, type]
+    );
+    wins = rows;
+  }
 
   if (!wins.length) {
     return { date, slots: [] };

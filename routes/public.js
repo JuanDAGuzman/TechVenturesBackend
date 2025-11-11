@@ -137,16 +137,16 @@ router.get("/customer-by-id", async (req, res) => {
 router.post("/appointments", async (req, res) => {
   try {
     const {
-      type_code, 
-      date, 
-      start_time, 
-      end_time, 
+      type_code,
+      date,
+      start_time,
+      end_time,
       product,
       customer_name,
       customer_email,
       customer_phone,
       customer_id_number,
-      delivery_method, 
+      delivery_method,
       notes,
       shipping_address,
       shipping_neighborhood,
@@ -179,24 +179,43 @@ router.post("/appointments", async (req, res) => {
 
     let finalStart = start_time || null;
     let finalEnd = null;
-
     if (type_code === "TRYOUT" || type_code === "PICKUP") {
       if (!start_time)
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
 
-      const winQ = await query(
+      let winQ = await query(
         `SELECT
+        to_char(start_time,'HH24:MI') AS s,
+        to_char(end_time,'HH24:MI')   AS e,
+        slot_minutes
+     FROM weekday_windows
+    WHERE date=$1 AND type_code=$2
+      AND start_time <= $3::time
+      AND end_time   >  $3::time
+    ORDER BY start_time
+    LIMIT 1`,
+        [date, type_code, start_time]
+      );
+
+      if (!winQ.rows.length) {
+        const dayOfWeek = dayjs(date).day();
+        if (dayOfWeek === 6) {
+          winQ = await query(
+            `SELECT
             to_char(start_time,'HH24:MI') AS s,
             to_char(end_time,'HH24:MI')   AS e,
             slot_minutes
-         FROM appt_windows
-        WHERE date=$1 AND type_code=$2
-          AND start_time <= $3::time
-          AND end_time   >  $3::time
+         FROM saturday_windows
+        WHERE date=$1
+          AND start_time <= $2::time
+          AND end_time   >  $2::time
         ORDER BY start_time
         LIMIT 1`,
-        [date, type_code, start_time]
-      );
+            [date, start_time]
+          );
+        }
+      }
+
       if (!winQ.rows.length) {
         return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
       }
@@ -222,9 +241,9 @@ router.post("/appointments", async (req, res) => {
 
       const clash = await query(
         `SELECT 1 FROM appointments
-          WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
-            AND start_time=$3 AND end_time=$4
-          LIMIT 1`,
+      WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
+        AND start_time=$3 AND end_time=$4
+      LIMIT 1`,
         [type_code, date, finalStart, finalEnd]
       );
       if (clash.rows.length) {
