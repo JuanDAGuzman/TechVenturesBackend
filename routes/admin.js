@@ -96,9 +96,10 @@ router.post("/appointments/:id/upload-guide", async (req, res) => {
 
 router.post("/windows", async (req, res) => {
   try {
-    const { date, type_code, start_time, end_time, slot_minutes } =
-      req.body || {};
-    if (!date || !type_code || !start_time || !end_time || !slot_minutes)
+    const { date, type_code, start_time, end_time } = req.body || {};
+    const slot_minutes = req.body.slot_minutes ?? 15; 
+
+    if (!date || !type_code || !start_time || !end_time)
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     if (!["TRYOUT", "PICKUP"].includes(type_code))
       return res.status(400).json({ ok: false, error: "INVALID_TYPE" });
@@ -711,7 +712,7 @@ router.post("/weekday-windows", async (req, res) => {
     for (const r of ranges) {
       const start = String(r.start || "");
       const end = String(r.end || "");
-      const minutes = Number(r.slot_minutes ?? 15);
+      const minutes = Number(r.slot_minutes ?? 15); // 🔥 AGREGAR VALOR POR DEFECTO
 
       if (
         !/^\d{2}:\d{2}$/.test(start) ||
