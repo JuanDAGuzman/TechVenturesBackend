@@ -132,17 +132,14 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
+
 const apiRouter = express.Router();
-
 apiRouter.use(express.json());
-
 apiRouter.post("/appointments", createApptIpLimiter, createApptLimiter);
-
 apiRouter.use(publicRoutes);
 
 app.use("/api", apiRouter);
-
-app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 
 app.use("/diag", diagnostics);
 
