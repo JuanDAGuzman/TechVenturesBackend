@@ -7,20 +7,19 @@ dayjs.extend(timezone);
 const TZ = "America/Bogota";
 
 const BRAND = {
-  indigo: "#6D28D9", 
+  indigo: "#6D28D9",
   indigoDark: "#5B21B6",
   ring: "rgba(99,102,241,0.35)",
-  text: "#0f172a", 
-  muted: "#475569", 
-  border: "#e2e8f0", 
+  text: "#0f172a",
+  muted: "#475569",
+  border: "#e2e8f0",
   bg: "#ffffff",
-  badgeTryout: "#EEF2FF", 
-  badgePickup: "#EFF6FF", 
-  badgeShip: "#ECFDF5", 
+  badgeTryout: "#EEF2FF",
+  badgePickup: "#EFF6FF",
+  badgeShip: "#ECFDF5",
 };
 
 function fmtApptLocal(appt) {
-
   const base = appt.start_time
     ? `${appt.date} ${String(appt.start_time).slice(0, 5)}`
     : `${appt.date} 00:00`;
@@ -299,133 +298,208 @@ export function buildReminderEmail(appt, { minutesLeft } = {}) {
   return { subject, html, text };
 }
 
-export function buildShippedEmail(
-  appt,
-  { trackingNumber, publicUrl, shippingCost, rideUrl, adminCopy } = {}
-) {
-  const carrier = (appt.shipping_carrier || "").toUpperCase();
-  const isPicap = carrier === "PICAP";
+export function buildShippedEmail(appt, opts = {}) {
+  const {
+    trackingNumber = null,
+    publicUrl = null,
+    shippingCost = null,
+    rideUrl = null,
+    adminCopy = false,
+  } = opts;
 
-  const fmtCOP = (v) =>
-    v == null || v === "" || Number.isNaN(Number(v))
-      ? "-"
-      : Number(v).toLocaleString("es-CO", {
-          style: "currency",
-          currency: "COP",
-          maximumFractionDigits: 0,
-        });
+  const isPicap = String(appt.shipping_carrier || "").toUpperCase() === "PICAP";
 
-  const subject = `${
-    adminCopy ? "Copia — " : ""
-  }Tu paquete ha sido enviado — TechVenturesCO`;
+  const BASE_URL =
+    process.env.PUBLIC_URL ||
+    process.env.BASE_URL ||
+    "https://techventuresbackend-production.up.railway.app";
+  const fullGuideUrl = publicUrl ? `${BASE_URL}${publicUrl}` : null;
 
-  const trackingRow =
-    !isPicap && trackingNumber
-      ? `
+  const subject = adminCopy
+    ? `Copia — ¡Tu paquete ha sido enviado!`
+    : "¡Tu paquete ha sido enviado!";
+
+  let trackingInfo = "";
+
+  if (isPicap && rideUrl) {
+    trackingInfo = `
       <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Número de guía</td>
-        <td style="padding:10px"><b>${esc(trackingNumber)}</b></td>
-      </tr>`
-      : "";
-
-  const costRow =
-    shippingCost != null && shippingCost !== ""
-      ? `
-      <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">${
-          isPicap ? "Valor del servicio" : "Valor del envío"
-        }</td>
-        <td style="padding:10px">${fmtCOP(shippingCost)}</td>
-      </tr>`
-      : "";
-
-  const rideRow =
-    isPicap && rideUrl
-      ? `
-      <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Link del viaje</td>
-        <td style="padding:10px">
-          <a href="${rideUrl}" target="_blank" style="color:#2563eb">${esc(
-          rideUrl
-        )}</a>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+          <strong style="color: #374151;">Transportadora:</strong>
         </td>
-      </tr>`
-      : "";
-
-  const guideRow =
-    !isPicap && publicUrl
-      ? `
-      <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Guía adjunta</td>
-        <td style="padding:10px">
-          <a href="${publicUrl}" target="_blank" style="color:#2563eb">Ver guía (PDF/imagen)</a>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          PICAP
         </td>
-      </tr>`
-      : "";
+      </tr>
+      <tr>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+          <strong style="color: #374151;">Link del viaje:</strong>
+        </td>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          <a href="${rideUrl}" style="color: #3b82f6; text-decoration: none;">Ver seguimiento</a>
+        </td>
+      </tr>
+    `;
+  } else if (trackingNumber) {
+    trackingInfo = `
+      <tr>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+          <strong style="color: #374151;">Número de guía:</strong>
+        </td>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          ${trackingNumber}
+        </td>
+      </tr>
+    `;
+
+    if (fullGuideUrl) {
+      trackingInfo += `
+        <tr>
+          <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+            <strong style="color: #374151;">Imagen de la guía:</strong>
+          </td>
+          <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+            <a href="${fullGuideUrl}" style="color: #3b82f6; text-decoration: none;" target="_blank">Ver guía</a>
+          </td>
+        </tr>
+      `;
+    }
+  }
+
+  if (shippingCost != null) {
+    trackingInfo += `
+      <tr>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+          <strong style="color: #374151;">Valor del ${
+            isPicap ? "servicio" : "envío"
+          }:</strong>
+        </td>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          ${Number(shippingCost).toLocaleString("es-CO", {
+            style: "currency",
+            currency: "COP",
+            maximumFractionDigits: 0,
+          })}
+        </td>
+      </tr>
+    `;
+  }
 
   const html = `
-  <div style="font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;max-width:680px;margin:0 auto;color:#0f172a">
-    <div style="height:4px;background:#059669;border-radius:2px"></div>
-    <h1 style="margin:16px 0 4px;font-size:22px;">TechVenturesCO</h1>
-    <h2 style="margin:0 0 16px;font-size:20px;">¡Tu paquete ha sido enviado!</h2>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${subject}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+          
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: bold;">TechVenturesCO</h1>
+              <p style="margin: 10px 0 0 0; color: #e0e7ff; font-size: 16px;">¡Tu paquete ha sido enviado!</p>
+            </td>
+          </tr>
 
-    <span style="display:inline-block;background:#ecfdf5;color:#065f46;font-weight:700;border-radius:999px;padding:6px 10px;font-size:12px">
-      Envío (no contraentrega)
-    </span>
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 20px 0; color: #111827; font-size: 24px; font-weight: 600;">
+                ${
+                  isPicap
+                    ? "Envío (no contraentrega)"
+                    : "Envío (no contraentrega)"
+                }
+              </h2>
+              
+              <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 16px; line-height: 1.6;">
+                Tu pedido ha sido despachado. ${
+                  isPicap
+                    ? "Puedes hacer seguimiento de tu viaje usando el link que aparece abajo."
+                    : fullGuideUrl
+                    ? "Hemos adjuntado la imagen de la guía de envío para que puedas hacer seguimiento."
+                    : "Usa el número de guía en el sitio de la transportadora para hacer seguimiento."
+                }
+              </p>
 
-    <table style="width:100%;margin-top:16px;border-collapse:collapse;border:1px solid #e2e8f0">
-      <tr>
-        <td style="width:180px;background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Fecha de solicitud</td>
-        <td style="padding:10px">${esc(fmtCreatedLocal(appt))}</td>
-      </tr>
-      <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Producto</td>
-        <td style="padding:10px">${esc(appt.product || "-")}</td>
-      </tr>
-      <tr>
-        <td style="background:#f8fafc;border-right:1px solid #e2e8f0;padding:10px">Transportadora</td>
-        <td style="padding:10px">${esc(appt.shipping_carrier || "-")}</td>
-      </tr>
-      ${trackingRow}
-      ${costRow}
-      ${rideRow}
-      ${guideRow}
-    </table>
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin: 30px 0; background-color: #f9fafb; border-radius: 8px; overflow: hidden;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                      ${trackingInfo}
+                    </table>
+                  </td>
+                </tr>
+              </table>
 
-    <div style="margin-top:16px">
-      <p style="margin:0 0 8px"><b>¿Qué sigue?</b></p>
-      <ul style="margin:8px 0 0 20px;line-height:1.45">
-        ${
-          isPicap
-            ? `<li>Comparte el link del viaje si te lo solicitan para seguimiento en tiempo real.</li>`
-            : `<li>Usa el número de guía en el sitio de la transportadora para hacer seguimiento.</li>`
-        }
-        <li>Al recibir, cancelas el costo del envío/servicio (si aplica).</li>
-      </ul>
-    </div>
+              <div style="margin: 30px 0; padding: 20px; background-color: #eff6ff; border-left: 4px solid #3b82f6; border-radius: 4px;">
+                <p style="margin: 0; color: #1e40af; font-size: 14px; line-height: 1.6;">
+                  <strong>¿Qué sigue?</strong><br>
+                  • Usa el ${
+                    isPicap ? "link" : "número de guía"
+                  } para hacer seguimiento.<br>
+                  ${
+                    !isPicap
+                      ? "• Al recibir, cancelas el costo del envío/servicio (si aplica)."
+                      : ""
+                  }
+                </p>
+              </div>
+            </td>
+          </tr>
 
-    <p style="margin-top:16px;color:#64748b;font-size:12px">
-      Este correo se envió automáticamente. Si recibiste este mensaje por error, ignóralo.
-    </p>
-  </div>`.trim();
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 10px 0; color: #6b7280; font-size: 14px;">
+                Este correo se envió automáticamente. Si recibiste este mensaje por error, ignóralo.
+              </p>
+              <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+                © ${new Date().getFullYear()} TechVenturesCO — Bogotá, Colombia
+              </p>
+            </td>
+          </tr>
 
-  const textLines = [
-    adminCopy ? "Copia — envío registrado" : "Tu envío fue despachado.",
-    `Transportadora: ${appt.shipping_carrier || "-"}`,
-    !isPicap && trackingNumber ? `Guía: ${trackingNumber}` : null,
-    shippingCost != null && shippingCost !== ""
-      ? `Valor: ${fmtCOP(shippingCost)}`
-      : null,
-    isPicap && rideUrl ? `Link del viaje: ${rideUrl}` : null,
-    !isPicap && publicUrl ? `Guía adjunta: ${publicUrl}` : null,
-    "",
-    isPicap
-      ? "Comparte el link del viaje para seguimiento."
-      : "Usa el número de guía para el seguimiento.",
-    "Al recibir, cancelas el costo del envío/servicio (si aplica).",
-  ].filter(Boolean);
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
 
-  const text = textLines.join("\n");
+  const text = `
+TechVenturesCO
+
+¡Tu paquete ha sido enviado!
+
+${isPicap ? "Transportadora: PICAP" : `Número de guía: ${trackingNumber}`}
+${
+  shippingCost != null
+    ? `Valor del ${isPicap ? "servicio" : "envío"}: $${Number(
+        shippingCost
+      ).toLocaleString("es-CO")}`
+    : ""
+}
+${isPicap && rideUrl ? `Link del viaje: ${rideUrl}` : ""}
+${!isPicap && fullGuideUrl ? `Ver guía: ${fullGuideUrl}` : ""}
+
+${
+  isPicap
+    ? "Puedes hacer seguimiento de tu viaje usando el link de arriba."
+    : "Usa el número de guía en el sitio de la transportadora para hacer seguimiento."
+}
+
+--
+Este correo se envió automáticamente.
+© ${new Date().getFullYear()} TechVenturesCO
+  `;
 
   return { subject, html, text };
 }
@@ -497,7 +571,6 @@ Si no puedes asistir, responde a este correo para reprogramar.`;
     text,
   };
 }
-
 
 export function emailForShipping(appt) {
   const {
@@ -678,12 +751,11 @@ export function buildAdminNewAppointmentEmail(appt) {
   return { subject, html, text };
 }
 
-
 export function buildConfirmationEmail(appt) {
   const isShipping = appt.type_code === "SHIPPING";
   const isPickup = appt.type_code === "PICKUP";
   const badge = typeLabelWithMinutes(appt.type_code, appt);
-  const mins = apptMinutes(appt) || 15; 
+  const mins = apptMinutes(appt) || 15;
 
   const subject = isShipping
     ? "¡Recibimos tus datos de envío!"
