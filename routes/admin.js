@@ -259,61 +259,64 @@ router.get("/appointments/:id", async (req, res) => {
   }
 });
 
-router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
-  try {
-    const { id } = req.params;
+router.patch(
+  "/appointments/:id/ship",
+  upload.single("guide"),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    const apptQ = await query(`SELECT * FROM appointments WHERE id=$1`, [id]);
-    if (!apptQ.rows.length) {
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-    }
-    const appt = apptQ.rows[0];
-    if (appt.type_code !== "SHIPPING") {
-      return res
-        .status(400)
-        .json({ ok: false, error: "NOT_SHIPPING_APPOINTMENT" });
-    }
-
-    const carrier = String(appt.shipping_carrier || "").toUpperCase();
-
-    const body = req.body || {};
-    const tracking_number = (body.tracking_number || "").trim();
-    const shipping_cost_raw = body.shipping_cost ?? null;
-    const shipping_cost =
-      shipping_cost_raw === null || shipping_cost_raw === ""
-        ? null
-        : Number(shipping_cost_raw);
-    const shipping_trip_link = (body.shipping_trip_link || "").trim();
-
-    const file =
-      Array.isArray(req.files) && req.files.length ? req.files[0] : null;
-
-    // 🔍 DEBUG: Información del archivo recibido
-    console.log(
-      "[DEBUG] file recibido:",
-      file
-        ? {
-            filename: file.filename,
-            originalname: file.originalname,
-            size: file.size,
-            mimetype: file.mimetype,
-            path: file.path,
-          }
-        : "NO HAY ARCHIVO"
-    );
-
-    let publicUrl = appt.tracking_file_url || null;
-    if (file?.filename) {
-      publicUrl = `/uploads/shipping-guides/${file.filename}`;
-      console.log("[DEBUG] publicUrl generada:", publicUrl);
-    }
-
-    if (carrier === "PICAP") {
-      if (!shipping_trip_link) {
-        return res.status(400).json({ ok: false, error: "MISSING_TRIP_LINK" });
+      const apptQ = await query(`SELECT * FROM appointments WHERE id=$1`, [id]);
+      if (!apptQ.rows.length) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
-      await query(
-        `
+      const appt = apptQ.rows[0];
+      if (appt.type_code !== "SHIPPING") {
+        return res
+          .status(400)
+          .json({ ok: false, error: "NOT_SHIPPING_APPOINTMENT" });
+      }
+
+      const carrier = String(appt.shipping_carrier || "").toUpperCase();
+
+      const body = req.body || {};
+      const tracking_number = (body.tracking_number || "").trim();
+      const shipping_cost_raw = body.shipping_cost ?? null;
+      const shipping_cost =
+        shipping_cost_raw === null || shipping_cost_raw === ""
+          ? null
+          : Number(shipping_cost_raw);
+      const shipping_trip_link = (body.shipping_trip_link || "").trim();
+
+      const file = req.file || null; 
+
+      console.log(
+        "[DEBUG] file recibido:",
+        file
+          ? {
+              filename: file.filename,
+              originalname: file.originalname,
+              size: file.size,
+              mimetype: file.mimetype,
+              path: file.path,
+            }
+          : "NO HAY ARCHIVO"
+      );
+
+      let publicUrl = appt.tracking_file_url || null;
+      if (file?.filename) {
+        publicUrl = `/uploads/shipping-guides/${file.filename}`;
+        console.log("[DEBUG] publicUrl generada:", publicUrl);
+      }
+
+      if (carrier === "PICAP") {
+        if (!shipping_trip_link) {
+          return res
+            .status(400)
+            .json({ ok: false, error: "MISSING_TRIP_LINK" });
+        }
+        await query(
+          `
           UPDATE appointments
           SET status = 'SHIPPED',
               tracking_number    = NULL,
@@ -323,14 +326,14 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
               shipped_at         = NOW()
           WHERE id = $1
         `,
-        [id, shipping_cost, shipping_trip_link]
-      );
-    } else {
-      if (!tracking_number) {
-        return res.status(400).json({ ok: false, error: "MISSING_TRACKING" });
-      }
-      await query(
-        `
+          [id, shipping_cost, shipping_trip_link]
+        );
+      } else {
+        if (!tracking_number) {
+          return res.status(400).json({ ok: false, error: "MISSING_TRACKING" });
+        }
+        await query(
+          `
           UPDATE appointments
           SET status = 'SHIPPED',
               tracking_number    = $2,
@@ -339,117 +342,125 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
               shipped_at         = NOW()
           WHERE id = $1
         `,
-        [id, tracking_number, publicUrl, shipping_cost]
-      );
-    }
-
-    const { rows: r2 } = await query(`SELECT * FROM appointments WHERE id=$1`, [
-      id,
-    ]);
-    const updated = r2[0];
-
-    try {
-      const { subject, html, text } = buildShippedEmail(updated, {
-        trackingNumber: carrier === "PICAP" ? null : tracking_number,
-        publicUrl: carrier === "PICAP" ? null : publicUrl,
-        shippingCost: shipping_cost,
-        rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
-      });
-
-      // 🔍 DEBUG: Preparación del correo
-      console.log("[DEBUG] Preparando envío de correo:");
-      console.log("  - Tiene archivo:", !!file);
-      console.log("  - Es PICAP:", carrier === "PICAP");
-      console.log("  - Condición para adjuntar:", file && carrier !== "PICAP");
-
-      if (file && carrier !== "PICAP") {
-        const fullPath = path.join(GUIDES_DIR, file.filename);
-        console.log("  - Ruta completa del archivo:", fullPath);
-        console.log("  - ¿Archivo existe?:", fs.existsSync(fullPath));
-        if (fs.existsSync(fullPath)) {
-          const stats = fs.statSync(fullPath);
-          console.log("  - Tamaño del archivo en disco:", stats.size, "bytes");
-        }
+          [id, tracking_number, publicUrl, shipping_cost]
+        );
       }
 
-      const adminBcc = (process.env.MAIL_NOTIFY || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const { rows: r2 } = await query(
+        `SELECT * FROM appointments WHERE id=$1`,
+        [id]
+      );
+      const updated = r2[0];
 
-      await sendMail({
-        to: updated.customer_email,
-        subject,
-        html,
-        text,
-        ...(file && carrier !== "PICAP"
-          ? {
-              attachments: [
-                {
-                  filename: file.originalname,
-                  path: path.join(GUIDES_DIR, file.filename),
-                },
-              ],
-            }
-          : {}),
-        ...(adminBcc.length ? { bcc: adminBcc } : {}),
-      });
-
-      console.log("[DEBUG] Correo enviado exitosamente al cliente");
-    } catch (e) {
-      console.error("[ship-email] ERROR COMPLETO:", e);
-    }
-
-    try {
-      const adminTo =
-        process.env.ADMIN_NOTIFY ||
-        process.env.MAIL_FROM ||
-        process.env.MAIL_USER;
-      if (adminTo) {
+      try {
         const { subject, html, text } = buildShippedEmail(updated, {
           trackingNumber: carrier === "PICAP" ? null : tracking_number,
           publicUrl: carrier === "PICAP" ? null : publicUrl,
           shippingCost: shipping_cost,
           rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
-          adminCopy: true,
         });
+
+        console.log("[DEBUG] Preparando envío de correo:");
+        console.log("  - Tiene archivo:", !!file);
+        console.log("  - Es PICAP:", carrier === "PICAP");
+        console.log(
+          "  - Condición para adjuntar:",
+          file && carrier !== "PICAP"
+        );
+
+        if (file && carrier !== "PICAP") {
+          const fullPath = path.join(GUIDES_DIR, file.filename);
+          console.log("  - Ruta completa del archivo:", fullPath);
+          console.log("  - ¿Archivo existe?:", fs.existsSync(fullPath));
+          if (fs.existsSync(fullPath)) {
+            const stats = fs.statSync(fullPath);
+            console.log(
+              "  - Tamaño del archivo en disco:",
+              stats.size,
+              "bytes"
+            );
+          }
+        }
+
+        const adminBcc = (process.env.MAIL_NOTIFY || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
         await sendMail({
-          to: adminTo,
-          subject: `Copia — ${subject}`,
+          to: updated.customer_email,
+          subject,
           html,
           text,
-          attachments:
-            file && carrier !== "PICAP"
-              ? [
+          ...(file && carrier !== "PICAP"
+            ? {
+                attachments: [
                   {
                     filename: file.originalname,
                     path: path.join(GUIDES_DIR, file.filename),
                   },
-                ]
-              : [],
+                ],
+              }
+            : {}),
+          ...(adminBcc.length ? { bcc: adminBcc } : {}),
         });
-        console.log("[DEBUG] Correo enviado exitosamente al admin");
-      }
-    } catch (e) {
-      console.error("[ship-email][admin] ERROR COMPLETO:", e);
-    }
 
-    return res.json({
-      ok: true,
-      item: {
-        id,
-        status: "SHIPPED",
-        tracking_number: carrier === "PICAP" ? null : tracking_number,
-        tracking_file_url: carrier === "PICAP" ? null : publicUrl,
-        shipping_cost,
-        shipping_trip_link: carrier === "PICAP" ? shipping_trip_link : null,
-      },
-    });
-  } catch (err) {
-    console.error("[admin] ship error:", err);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+        console.log("[DEBUG] Correo enviado exitosamente al cliente");
+      } catch (e) {
+        console.error("[ship-email] ERROR COMPLETO:", e);
+      }
+
+      try {
+        const adminTo =
+          process.env.ADMIN_NOTIFY ||
+          process.env.MAIL_FROM ||
+          process.env.MAIL_USER;
+        if (adminTo) {
+          const { subject, html, text } = buildShippedEmail(updated, {
+            trackingNumber: carrier === "PICAP" ? null : tracking_number,
+            publicUrl: carrier === "PICAP" ? null : publicUrl,
+            shippingCost: shipping_cost,
+            rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
+            adminCopy: true,
+          });
+          await sendMail({
+            to: adminTo,
+            subject: `Copia — ${subject}`,
+            html,
+            text,
+            attachments:
+              file && carrier !== "PICAP"
+                ? [
+                    {
+                      filename: file.originalname,
+                      path: path.join(GUIDES_DIR, file.filename),
+                    },
+                  ]
+                : [],
+          });
+          console.log("[DEBUG] Correo enviado exitosamente al admin");
+        }
+      } catch (e) {
+        console.error("[ship-email][admin] ERROR COMPLETO:", e);
+      }
+
+      return res.json({
+        ok: true,
+        item: {
+          id,
+          status: "SHIPPED",
+          tracking_number: carrier === "PICAP" ? null : tracking_number,
+          tracking_file_url: carrier === "PICAP" ? null : publicUrl,
+          shipping_cost,
+          shipping_trip_link: carrier === "PICAP" ? shipping_trip_link : null,
+        },
+      });
+    } catch (err) {
+      console.error("[admin] ship error:", err);
+      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    }
   }
-});
+);
 
 router.patch("/appointments/:id", async (req, res) => {
   try {
