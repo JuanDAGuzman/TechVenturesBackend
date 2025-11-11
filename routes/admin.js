@@ -1,7 +1,5 @@
 import express from "express";
 import { query } from "../db.js";
-
-import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
@@ -18,25 +16,6 @@ const GUIDES_DIR = path.join(__dirname, "..", "uploads", "shipping-guides");
 
 fs.mkdirSync(GUIDES_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, GUIDES_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase();
-    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ok = /pdf|png|jpg|jpeg|webp/i.test(
-      path.extname(file.originalname || "").slice(1)
-    );
-    cb(ok ? null : new Error("INVALID_FILE"));
-  },
-});
-
 function toMin(hhmm = "") {
   const [h, m] = String(hhmm).slice(0, 5).split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
@@ -51,12 +30,68 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
 function isSlotSize(n) {
   return [15, 20, 30].includes(Number(n));
 }
+
 router.use((req, res, next) => {
   const token = req.headers["x-admin-token"];
   if (token !== process.env.ADMIN_TOKEN) {
     return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
   }
   next();
+});
+
+router.post("/appointments/:id/upload-guide", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { filename, fileData } = req.body;
+
+    if (!fileData || !filename) {
+      console.error("[upload-guide] Faltan datos:", {
+        filename: !!filename,
+        fileData: !!fileData,
+      });
+      return res.status(400).json({ ok: false, error: "NO_FILE" });
+    }
+
+    console.log(
+      "[upload-guide] Recibiendo archivo:",
+      filename,
+      "Tamaño base64:",
+      fileData.length
+    );
+
+    const buffer = Buffer.from(fileData, "base64");
+    const ext = path.extname(filename).toLowerCase();
+    const newFilename = `${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2)}${ext}`;
+    const filePath = path.join(GUIDES_DIR, newFilename);
+
+    fs.writeFileSync(filePath, buffer);
+
+    console.log(
+      "[upload-guide] Archivo guardado:",
+      newFilename,
+      "Tamaño:",
+      buffer.length,
+      "bytes"
+    );
+
+    const publicUrl = `/uploads/shipping-guides/${newFilename}`;
+
+    await query(
+      `UPDATE appointments SET tracking_file_url = $1 WHERE id = $2`,
+      [publicUrl, id]
+    );
+
+    return res.json({
+      ok: true,
+      url: publicUrl,
+      filename: filename,
+    });
+  } catch (err) {
+    console.error("[upload-guide] error:", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
 });
 
 router.post("/windows", async (req, res) => {
@@ -258,43 +293,6 @@ router.get("/appointments/:id", async (req, res) => {
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
-
-router.post(
-  "/appointments/:id/upload-guide",
-  upload.single("guide"),
-  async (req, res) => {
-    try {
-      const { id } = req.params;
-      const file = req.file;
-
-      if (!file) {
-        return res.status(400).json({ ok: false, error: "NO_FILE" });
-      }
-
-      console.log("[upload-guide] Archivo recibido:", {
-        filename: file.filename,
-        originalname: file.originalname,
-        size: file.size,
-      });
-
-      const publicUrl = `/uploads/shipping-guides/${file.filename}`;
-
-      await query(
-        `UPDATE appointments SET tracking_file_url = $1 WHERE id = $2`,
-        [publicUrl, id]
-      );
-
-      return res.json({
-        ok: true,
-        url: publicUrl,
-        filename: file.originalname,
-      });
-    } catch (err) {
-      console.error("[upload-guide] error:", err);
-      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-    }
-  }
-);
 
 router.patch("/appointments/:id/ship", async (req, res) => {
   try {
