@@ -11,19 +11,13 @@ import { sendMail } from "../services/mailer.js";
 
 const router = express.Router();
 
-// 1) Primero __filename / __dirname (ESM)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 2) Luego paths que dependan de __dirname
 const GUIDES_DIR = path.join(__dirname, "..", "uploads", "shipping-guides");
 
-// 3) Asegurar carpeta de guías
 fs.mkdirSync(GUIDES_DIR, { recursive: true });
 
-/* ───────────────────────────
-   Multer: guía adjunta (PDF/JPG/PNG/WEBP)
-   ─────────────────────────── */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, GUIDES_DIR),
   filename: (req, file, cb) => {
@@ -34,7 +28,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = /pdf|png|jpg|jpeg|webp/i.test(
       path.extname(file.originalname || "").slice(1)
@@ -51,14 +45,12 @@ function minutesBetween(a, b) {
   if (!a || !b) return null;
   return toMin(b) - toMin(a);
 }
-/** solape si (a.start < b.end) && (b.start < a.end) */
 function overlaps(aStart, aEnd, bStart, bEnd) {
   return toMin(aStart) < toMin(bEnd) && toMin(bStart) < toMin(aEnd);
 }
 function isSlotSize(n) {
   return [15, 20, 30].includes(Number(n));
 }
-/* Ventanas L-V */
 router.use((req, res, next) => {
   const token = req.headers["x-admin-token"];
   if (token !== process.env.ADMIN_TOKEN) {
@@ -67,7 +59,6 @@ router.use((req, res, next) => {
   next();
 });
 
-// === CREAR ventana ===
 router.post("/windows", async (req, res) => {
   try {
     const { date, type_code, start_time, end_time, slot_minutes } =
@@ -81,7 +72,6 @@ router.post("/windows", async (req, res) => {
     if (minutesBetween(start_time, end_time) <= 0)
       return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
 
-    // Evitar solapes con otras ventanas del mismo día/tipo
     const existing = await query(
       `SELECT id, start_time, end_time
        FROM appt_windows WHERE date=$1 AND type_code=$2`,
@@ -95,7 +85,6 @@ router.post("/windows", async (req, res) => {
         .status(409)
         .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
 
-    // Insert
     const ins = await query(
       `INSERT INTO appt_windows(date,type_code,start_time,end_time,slot_minutes)
        VALUES($1,$2,$3,$4,$5) RETURNING id`,
@@ -108,7 +97,6 @@ router.post("/windows", async (req, res) => {
   }
 });
 
-// === EDITAR ventana ===
 router.patch("/windows/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -127,7 +115,6 @@ router.patch("/windows/:id", async (req, res) => {
     if (minutesBetween(st, en) <= 0)
       return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
 
-    // solape contra otras ventanas del mismo día/tipo (excluyendo la propia)
     const others = await query(
       `SELECT id, start_time, end_time
        FROM appt_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
@@ -154,12 +141,10 @@ router.patch("/windows/:id", async (req, res) => {
   }
 });
 
-// === ELIMINAR ventana ===
 router.delete("/windows/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const del = await query(`DELETE FROM appt_windows WHERE id=$1`, [id]);
-    // (del.rowCount===0) -> no existía
     return res.json({ ok: true, removed: del.rowCount });
   } catch (e) {
     console.error("[admin/windows DELETE]", e);
@@ -167,7 +152,6 @@ router.delete("/windows/:id", async (req, res) => {
   }
 });
 
-// === Listar ventanas por día/tipo (para el panel) ===
 router.get("/windows", async (req, res) => {
   try {
     const { date, type } = req.query;
@@ -185,13 +169,6 @@ router.get("/windows", async (req, res) => {
   }
 });
 
-/* ───────────────────────────
-   Auth admin por header x-admin-token
-   ─────────────────────────── */
-
-/* ───────────────────────────
-   GET /api/admin/appointments?date=YYYY-MM-DD
-   ─────────────────────────── */
 router.get("/appointments", async (req, res) => {
   try {
     const { date } = req.query || {};
@@ -238,9 +215,6 @@ router.get("/appointments", async (req, res) => {
   }
 });
 
-/* ───────────────────────────
-   GET /api/admin/appointments/:id
-   ─────────────────────────── */
 router.get("/appointments/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -285,62 +259,45 @@ router.get("/appointments/:id", async (req, res) => {
   }
 });
 
-/* ───────────────────────────
-   PATCH /api/admin/appointments/:id/ship
-   body: tracking_number (text)
-         shipping_cost (number, opcional)
-         shipping_trip_link (text, opcional; útil en PICAP)
-   file: guía (pdf/jpg/png/webp) (opcional) — campo: guide
-   ─────────────────────────── */
-router.patch(
-  "/appointments/:id/ship",
-  upload.any(), // sigue permitiendo multipart para adjunto de guía
-  async (req, res) => {
-    try {
-      const { id } = req.params;
+router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
+  try {
+    const { id } = req.params;
 
-      // Lee la cita
-      const apptQ = await query(`SELECT * FROM appointments WHERE id=$1`, [id]);
-      if (!apptQ.rows.length) {
-        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    const apptQ = await query(`SELECT * FROM appointments WHERE id=$1`, [id]);
+    if (!apptQ.rows.length) {
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    }
+    const appt = apptQ.rows[0];
+    if (appt.type_code !== "SHIPPING") {
+      return res
+        .status(400)
+        .json({ ok: false, error: "NOT_SHIPPING_APPOINTMENT" });
+    }
+
+    const carrier = String(appt.shipping_carrier || "").toUpperCase();
+
+    const body = req.body || {};
+    const tracking_number = (body.tracking_number || "").trim();
+    const shipping_cost_raw = body.shipping_cost ?? null;
+    const shipping_cost =
+      shipping_cost_raw === null || shipping_cost_raw === ""
+        ? null
+        : Number(shipping_cost_raw);
+    const shipping_trip_link = (body.shipping_trip_link || "").trim();
+
+    const file =
+      Array.isArray(req.files) && req.files.length ? req.files[0] : null;
+    let publicUrl = appt.tracking_file_url || null;
+    if (file?.filename) {
+      publicUrl = `/uploads/shipping-guides/${file.filename}`;
+    }
+
+    if (carrier === "PICAP") {
+      if (!shipping_trip_link) {
+        return res.status(400).json({ ok: false, error: "MISSING_TRIP_LINK" });
       }
-      const appt = apptQ.rows[0];
-      if (appt.type_code !== "SHIPPING") {
-        return res
-          .status(400)
-          .json({ ok: false, error: "NOT_SHIPPING_APPOINTMENT" });
-      }
-
-      const carrier = String(appt.shipping_carrier || "").toUpperCase();
-
-      // Normaliza body (puede venir json o multipart)
-      const body = req.body || {};
-      const tracking_number = (body.tracking_number || "").trim();
-      const shipping_cost_raw = body.shipping_cost ?? null;
-      const shipping_cost =
-        shipping_cost_raw === null || shipping_cost_raw === ""
-          ? null
-          : Number(shipping_cost_raw);
-      const shipping_trip_link = (body.shipping_trip_link || "").trim();
-
-      // Archivo (solo para transportadoras con guía)
-      const file =
-        Array.isArray(req.files) && req.files.length ? req.files[0] : null;
-      let publicUrl = appt.tracking_file_url || null;
-      if (file?.filename) {
-        publicUrl = `/uploads/shipping-guides/${file.filename}`;
-      }
-
-      // Reglas por carrier
-      if (carrier === "PICAP") {
-        if (!shipping_trip_link) {
-          return res
-            .status(400)
-            .json({ ok: false, error: "MISSING_TRIP_LINK" });
-        }
-        // Marca enviado sin guía
-        await query(
-          `
+      await query(
+        `
           UPDATE appointments
           SET status = 'SHIPPED',
               tracking_number    = NULL,
@@ -350,14 +307,14 @@ router.patch(
               shipped_at         = NOW()
           WHERE id = $1
         `,
-          [id, shipping_cost, shipping_trip_link]
-        );
-      } else {
-        if (!tracking_number) {
-          return res.status(400).json({ ok: false, error: "MISSING_TRACKING" });
-        }
-        await query(
-          `
+        [id, shipping_cost, shipping_trip_link]
+      );
+    } else {
+      if (!tracking_number) {
+        return res.status(400).json({ ok: false, error: "MISSING_TRACKING" });
+      }
+      await query(
+        `
           UPDATE appointments
           SET status = 'SHIPPED',
               tracking_number    = $2,
@@ -366,107 +323,99 @@ router.patch(
               shipped_at         = NOW()
           WHERE id = $1
         `,
-          [id, tracking_number, publicUrl, shipping_cost]
-        );
-      }
-
-      // Relee para correo
-      const { rows: r2 } = await query(
-        `SELECT * FROM appointments WHERE id=$1`,
-        [id]
+        [id, tracking_number, publicUrl, shipping_cost]
       );
-      const updated = r2[0];
+    }
 
-      // Email a cliente
-      try {
+    const { rows: r2 } = await query(`SELECT * FROM appointments WHERE id=$1`, [
+      id,
+    ]);
+    const updated = r2[0];
+
+    try {
+      const { subject, html, text } = buildShippedEmail(updated, {
+        trackingNumber: carrier === "PICAP" ? null : tracking_number,
+        publicUrl: carrier === "PICAP" ? null : publicUrl,
+        shippingCost: shipping_cost,
+        rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
+      });
+
+      const adminBcc = (process.env.MAIL_NOTIFY || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      await sendMail({
+        to: updated.customer_email,
+        subject,
+        html,
+        text,
+        ...(file && carrier !== "PICAP"
+          ? {
+              attachments: [
+                {
+                  filename: file.originalname,
+                  path: path.join(GUIDES_DIR, file.filename),
+                },
+              ],
+            }
+          : {}),
+        ...(adminBcc.length ? { bcc: adminBcc } : {}),
+      });
+    } catch (e) {
+      console.error("[ship-email] ERROR COMPLETO:", e);
+    }
+
+    try {
+      const adminTo =
+        process.env.ADMIN_NOTIFY ||
+        process.env.MAIL_FROM ||
+        process.env.MAIL_USER;
+      if (adminTo) {
         const { subject, html, text } = buildShippedEmail(updated, {
           trackingNumber: carrier === "PICAP" ? null : tracking_number,
           publicUrl: carrier === "PICAP" ? null : publicUrl,
           shippingCost: shipping_cost,
           rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
+          adminCopy: true,
         });
-
-        const adminBcc = (process.env.MAIL_NOTIFY || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-
         await sendMail({
-          to: updated.customer_email,
-          subject,
+          to: adminTo,
+          subject: `Copia — ${subject}`,
           html,
           text,
-          ...(file && carrier !== "PICAP"
-            ? {
-                attachments: [
+          attachments:
+            file && carrier !== "PICAP"
+              ? [
                   {
                     filename: file.originalname,
                     path: path.join(GUIDES_DIR, file.filename),
                   },
-                ],
-              }
-            : {}),
-          ...(adminBcc.length ? { bcc: adminBcc } : {}),
+                ]
+              : [],
         });
-      } catch (e) {
-        console.warn("[ship-email]", e.message);
       }
-
-      // Copia a admin
-      try {
-        const adminTo =
-          process.env.ADMIN_NOTIFY ||
-          process.env.MAIL_FROM ||
-          process.env.MAIL_USER;
-        if (adminTo) {
-          const { subject, html, text } = buildShippedEmail(updated, {
-            trackingNumber: carrier === "PICAP" ? null : tracking_number,
-            publicUrl: carrier === "PICAP" ? null : publicUrl,
-            shippingCost: shipping_cost,
-            rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
-            adminCopy: true,
-          });
-          await sendMail({
-            to: adminTo,
-            subject: `Copia — ${subject}`,
-            html,
-            text,
-            attachments:
-              file && carrier !== "PICAP"
-                ? [
-                    {
-                      filename: file.originalname,
-                      path: path.join(GUIDES_DIR, file.filename),
-                    },
-                  ]
-                : [],
-          });
-        }
-      } catch (e) {
-        console.warn("[ship-email][admin]", e.message);
-      }
-
-      return res.json({
-        ok: true,
-        item: {
-          id,
-          status: "SHIPPED",
-          tracking_number: carrier === "PICAP" ? null : tracking_number,
-          tracking_file_url: carrier === "PICAP" ? null : publicUrl,
-          shipping_cost,
-          shipping_trip_link: carrier === "PICAP" ? shipping_trip_link : null,
-        },
-      });
-    } catch (err) {
-      console.error("[admin] ship error:", err);
-      return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    } catch (e) {
+      console.error("[ship-email][admin] ERROR COMPLETO:", e);
     }
-  }
-);
 
-/* ───────────────────────────
-   PATCH /api/admin/appointments/:id (editar)
-   ─────────────────────────── */
+    return res.json({
+      ok: true,
+      item: {
+        id,
+        status: "SHIPPED",
+        tracking_number: carrier === "PICAP" ? null : tracking_number,
+        tracking_file_url: carrier === "PICAP" ? null : publicUrl,
+        shipping_cost,
+        shipping_trip_link: carrier === "PICAP" ? shipping_trip_link : null,
+      },
+    });
+  } catch (err) {
+    console.error("[admin] ship error:", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 router.patch("/appointments/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -537,21 +486,13 @@ router.patch("/appointments/:id", async (req, res) => {
   }
 });
 
-/* ───────────────────────────
-   DELETE /api/admin/appointments (masivo)
-   ─────────────────────────── */
-/* ───────────────────────────
-   DELETE /api/admin/appointments (masivo)
-   ─────────────────────────── */
 router.delete("/appointments", async (req, res) => {
   try {
     const { ids } = req.body || {};
-    // Debe venir un array de UUIDs (strings)
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ ok: false, error: "INVALID_IDS" });
     }
 
-    // Normaliza a strings no vacíos
     const uuids = ids
       .map((v) => (v == null ? "" : String(v).trim()))
       .filter(Boolean);
@@ -561,7 +502,6 @@ router.delete("/appointments", async (req, res) => {
     }
 
     await query("BEGIN");
-    // IMPORTANTE: castear a uuid[]
     const r = await query(
       `DELETE FROM appointments WHERE id = ANY($1::uuid[])`,
       [uuids]
@@ -576,11 +516,6 @@ router.delete("/appointments", async (req, res) => {
   }
 });
 
-/* ───────────────────────────
-   SÁBADOS — ventanas de disponibilidad
-   ─────────────────────────── */
-// POST /api/admin/saturday-windows
-// Guarda rangos. Por defecto AGREGA sin borrar; si quieres reemplazar todo usa ?replace=1
 router.post("/saturday-windows", async (req, res) => {
   try {
     const { date, ranges } = req.body || {};
@@ -669,7 +604,6 @@ router.delete("/saturday-windows/:id", async (req, res) => {
   }
 });
 
-// PATCH /api/admin/saturday-windows/:id  body: { start, end }
 router.patch("/saturday-windows/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -796,7 +730,6 @@ router.post("/weekday-windows", async (req, res) => {
   }
 });
 
-// PATCH /api/admin/weekday-windows/:id  body: { start, end }
 router.patch("/weekday-windows/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -816,7 +749,6 @@ router.patch("/weekday-windows/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     const { date, type_code } = cur[0];
 
-    // evitar solapes con otros manuales del mismo día+tipo
     const { rows: overlap } = await query(
       `
       SELECT 1

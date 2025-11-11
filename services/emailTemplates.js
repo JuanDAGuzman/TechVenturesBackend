@@ -7,20 +7,20 @@ dayjs.extend(timezone);
 const TZ = "America/Bogota";
 
 const BRAND = {
-  indigo: "#6D28D9", // morado TechVentures
+  indigo: "#6D28D9", 
   indigoDark: "#5B21B6",
   ring: "rgba(99,102,241,0.35)",
-  text: "#0f172a", // slate-900
-  muted: "#475569", // slate-600
-  border: "#e2e8f0", // slate-200
+  text: "#0f172a", 
+  muted: "#475569", 
+  border: "#e2e8f0", 
   bg: "#ffffff",
-  badgeTryout: "#EEF2FF", // indigo-50
-  badgePickup: "#EFF6FF", // blue-50
-  badgeShip: "#ECFDF5", // emerald-50
+  badgeTryout: "#EEF2FF", 
+  badgePickup: "#EFF6FF", 
+  badgeShip: "#ECFDF5", 
 };
 
 function fmtApptLocal(appt) {
-  // Si no hay start_time, mostramos solo la fecha local
+
   const base = appt.start_time
     ? `${appt.date} ${String(appt.start_time).slice(0, 5)}`
     : `${appt.date} 00:00`;
@@ -91,7 +91,6 @@ function tableRow(label, value) {
 }
 
 function layout({ title, preheader, bodyHtml }) {
-  // Tabla 600px, estilos inline para compatibilidad
   return `
 <!DOCTYPE html>
 <html lang="es">
@@ -215,9 +214,7 @@ function escapeHtml(s = "") {
     .replaceAll('"', "&quot;");
 }
 
-/* ---------- Helpers de formato ---------- */
 function fmtHour(hhmm, date) {
-  // Entrada "HH:mm", salida "hh:mm a. m./p. m."
   const d = dayjs(`${date} ${hhmm}`);
   const suf = d.format("A") === "AM" ? "a. m." : "p. m.";
   return `${d.format("hh:mm")} ${suf}`;
@@ -242,7 +239,6 @@ export function buildReminderEmail(appt, { minutesLeft } = {}) {
   const date = appt.date;
   const time = appt.start_time ? `${appt.start_time} – ${appt.end_time}` : "—";
 
-  // Texto dinámico según minutos reales restantes
   let etaLabel = "~1 hora";
   if (typeof minutesLeft === "number") {
     if (minutesLeft <= 10) etaLabel = "en breve";
@@ -413,7 +409,6 @@ export function buildShippedEmail(
     </p>
   </div>`.trim();
 
-  // Texto plano
   const textLines = [
     adminCopy ? "Copia — envío registrado" : "Tu envío fue despachado.",
     `Transportadora: ${appt.shipping_carrier || "-"}`,
@@ -435,9 +430,6 @@ export function buildShippedEmail(
   return { subject, html, text };
 }
 
-/* ===========================================================
-   Plantilla: Cita PRESENCIAL (TRYOUT / PICKUP)
-=========================================================== */
 export function emailForInPerson(appt) {
   const { type_code, date, start_time, end_time, product, customer_name } =
     appt;
@@ -506,9 +498,7 @@ Si no puedes asistir, responde a este correo para reprogramar.`;
   };
 }
 
-/* ===========================================================
-   Plantilla: Envío (SHIPPING)
-=========================================================== */
+
 export function emailForShipping(appt) {
   const {
     date,
@@ -586,7 +576,6 @@ Te contactaremos para confirmar pago y coordinar la recolección.`;
   };
 }
 
-// ⬇️ PÉGALO al final del archivo (o junto a los otros templates)
 export function buildAdminNewAppointmentEmail(appt) {
   const isShipping = appt.type_code === "SHIPPING";
   const typeLabel = typeLabelWithMinutes(appt.type_code, appt);
@@ -689,14 +678,12 @@ export function buildAdminNewAppointmentEmail(appt) {
   return { subject, html, text };
 }
 
-/* ===========================================================
-   Selector según delivery_method
-=========================================================== */
+
 export function buildConfirmationEmail(appt) {
   const isShipping = appt.type_code === "SHIPPING";
   const isPickup = appt.type_code === "PICKUP";
   const badge = typeLabelWithMinutes(appt.type_code, appt);
-  const mins = apptMinutes(appt) || 15; // fallback visual
+  const mins = apptMinutes(appt) || 15; 
 
   const subject = isShipping
     ? "¡Recibimos tus datos de envío!"
@@ -712,7 +699,6 @@ export function buildConfirmationEmail(appt) {
       ? `${appt.start_time} – ${appt.end_time}`
       : "—";
 
-  // Tabla de detalles
   let detailsTable = "";
   if (isShipping) {
     detailsTable = `
@@ -733,7 +719,6 @@ export function buildConfirmationEmail(appt) {
     `;
   }
 
-  // Indicaciones según tipo
   const tips = isShipping
     ? `
       <h3 style="margin:18px 0 8px 0;color:#0f172a;font-size:16px">¿Qué sigue?</h3>
@@ -807,7 +792,6 @@ export function buildConfirmationEmail(appt) {
 </body>
 </html>`;
 
-  // Texto plano equivalente
   const text = isShipping
     ? `Recibimos tus datos de envío
 Fecha: ${appt.date}
