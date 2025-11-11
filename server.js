@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -22,27 +21,23 @@ dotenv.config();
 
 const app = express();
 
-/* ───────── Base ───────── */
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
-app.use(express.json());
+
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-/* ───────── CORS CONFIG ───────── */
-// 1. Parseamos la env var, limpiamos espacios Y saltos de línea
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
-  .map((s) => s.replace(/\s+/g, "")) // <- elimina espacios, saltos de línea, tabs
+  .map((s) => s.replace(/\s+/g, ""))
   .filter(Boolean);
 
 console.log("[CORS] allowedOrigins sanitized:", allowedOrigins);
 
 function isOriginAllowed(origin) {
-  if (!origin) return true; // curl / same-origin / server-to-server
+  if (!origin) return true;
   if (allowedOrigins.length === 0) return true;
   return allowedOrigins.includes(origin);
 }
 
-// Middleware CORS manual primero (afecta TODAS las requests, incl OPTIONS)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const ok = isOriginAllowed(origin);
@@ -82,7 +77,6 @@ app.use((req, res, next) => {
   return next();
 });
 
-// cors() oficial para las requests normales (GET/POST reales)
 const corsConfig = {
   origin: function (origin, cb) {
     if (isOriginAllowed(origin)) {
@@ -95,7 +89,6 @@ const corsConfig = {
 };
 app.use(cors(corsConfig));
 
-/* ───────── Rate limits ───────── */
 const createApptIpLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 2,
@@ -130,7 +123,6 @@ const adminBruteforceLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
-/* ───────── Auth admin ───────── */
 function requireAdmin(req, res, next) {
   const token = (req.headers["x-admin-token"] || "").trim();
   const expected = (process.env.ADMIN_TOKEN || "").trim();
@@ -140,32 +132,23 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-/* ───────── Rutas ───────── */
 const apiRouter = express.Router();
 
-// Límite de rate para crear citas
+apiRouter.use(express.json());
+
 apiRouter.post("/appointments", createApptIpLimiter, createApptLimiter);
 
-// Rutas públicas de negocio:
-//   GET  /availability
-//   GET  /shipping-options
-//   POST /appointments   (mismo path que arriba, ya con lógica real)
 apiRouter.use(publicRoutes);
 
-// Montamos /api/*
 app.use("/api", apiRouter);
 
-// Admin panel
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 
-// Diagnóstico interno
 app.use("/diag", diagnostics);
 
-/* ───────── Health ───────── */
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-/* ───────── 404 & Error handler ───────── */
 app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 
 app.use((err, _req, res, _next) => {
@@ -176,7 +159,6 @@ app.use((err, _req, res, _next) => {
     .json({ ok: false, error: msg });
 });
 
-/* ───────── Helpers de init de DB (idempotentes) ───────── */
 async function applySchemaIdempotent() {
   const ddlPath = new URL("./sql/schema.sql", import.meta.url);
   const ddl = fs.readFileSync(ddlPath, "utf8");
@@ -210,7 +192,6 @@ async function ensureAppointmentsMinutesColumn() {
   `);
 }
 
-/* ───────── Arranque ───────── */
 const PORT = Number(process.env.PORT || 4000);
 
 (async () => {
