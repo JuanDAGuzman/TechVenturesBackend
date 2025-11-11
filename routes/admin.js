@@ -287,9 +287,25 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
 
     const file =
       Array.isArray(req.files) && req.files.length ? req.files[0] : null;
+
+    // 🔍 DEBUG: Información del archivo recibido
+    console.log(
+      "[DEBUG] file recibido:",
+      file
+        ? {
+            filename: file.filename,
+            originalname: file.originalname,
+            size: file.size,
+            mimetype: file.mimetype,
+            path: file.path,
+          }
+        : "NO HAY ARCHIVO"
+    );
+
     let publicUrl = appt.tracking_file_url || null;
     if (file?.filename) {
       publicUrl = `/uploads/shipping-guides/${file.filename}`;
+      console.log("[DEBUG] publicUrl generada:", publicUrl);
     }
 
     if (carrier === "PICAP") {
@@ -340,6 +356,22 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
         rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
       });
 
+      // 🔍 DEBUG: Preparación del correo
+      console.log("[DEBUG] Preparando envío de correo:");
+      console.log("  - Tiene archivo:", !!file);
+      console.log("  - Es PICAP:", carrier === "PICAP");
+      console.log("  - Condición para adjuntar:", file && carrier !== "PICAP");
+
+      if (file && carrier !== "PICAP") {
+        const fullPath = path.join(GUIDES_DIR, file.filename);
+        console.log("  - Ruta completa del archivo:", fullPath);
+        console.log("  - ¿Archivo existe?:", fs.existsSync(fullPath));
+        if (fs.existsSync(fullPath)) {
+          const stats = fs.statSync(fullPath);
+          console.log("  - Tamaño del archivo en disco:", stats.size, "bytes");
+        }
+      }
+
       const adminBcc = (process.env.MAIL_NOTIFY || "")
         .split(",")
         .map((s) => s.trim())
@@ -362,6 +394,8 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
           : {}),
         ...(adminBcc.length ? { bcc: adminBcc } : {}),
       });
+
+      console.log("[DEBUG] Correo enviado exitosamente al cliente");
     } catch (e) {
       console.error("[ship-email] ERROR COMPLETO:", e);
     }
@@ -394,6 +428,7 @@ router.patch("/appointments/:id/ship", upload.any(), async (req, res) => {
                 ]
               : [],
         });
+        console.log("[DEBUG] Correo enviado exitosamente al admin");
       }
     } catch (e) {
       console.error("[ship-email][admin] ERROR COMPLETO:", e);

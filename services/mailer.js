@@ -1,14 +1,11 @@
-// services/mailer.js
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
 
 import fs from "fs";
 
-// Opcional (solo si dejas Resend como fallback)
 const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
 
-// ===== ENV =====
-const MAIL_PROVIDER = String(process.env.MAIL_PROVIDER || "").toLowerCase(); // 'gmailapi' | 'resend' | ''
+const MAIL_PROVIDER = String(process.env.MAIL_PROVIDER || "").toLowerCase(); 
 const FROM = process.env.MAIL_FROM || `"TechVenturesCO" <no-reply@localhost>`;
 const REPLY_TO = process.env.MAIL_REPLY_TO || undefined;
 
@@ -19,7 +16,6 @@ const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN || "";
 const DEBUG =
   String(process.env.MAIL_DEBUG ?? "false").toLowerCase() === "true";
 
-// ===== Utiles =====
 function toBase64Url(buffer) {
   return Buffer.from(buffer)
     .toString("base64")
@@ -31,7 +27,6 @@ function toBase64Url(buffer) {
 const CRLF = "\r\n";
 
 function encodeSubjectUtf8B(s = "") {
-  // "=?UTF-8?B?...?="  (encoded-word para encabezados no ASCII)
   return `=?UTF-8?B?${Buffer.from(String(s), "utf8").toString("base64")}?=`;
 }
 
@@ -58,14 +53,12 @@ function buildMime({
   if (cc) headers.push(`Cc: ${Array.isArray(cc) ? cc.join(", ") : cc}`);
   if (bcc) headers.push(`Bcc: ${Array.isArray(bcc) ? bcc.join(", ") : bcc}`);
   if (replyTo) headers.push(`Reply-To: ${replyTo}`);
-  // 👇 Subject codificado (evita mojibake)
   headers.push(`Subject: ${encodeSubjectUtf8B(subject || "")}`);
   headers.push(`MIME-Version: 1.0`);
 
   const hasAttachments = attachments && attachments.length > 0;
 
   if (!hasAttachments) {
-    // multipart/alternative (texto + html)
     if (html && text) {
       headers.push(
         `Content-Type: multipart/alternative; boundary="${boundary}"${CRLF}`
@@ -89,7 +82,6 @@ function buildMime({
       return headers.join(CRLF) + CRLF + CRLF + body;
     }
 
-    // Solo html
     if (html) {
       headers.push(
         `Content-Type: text/html; charset=UTF-8`,
@@ -99,7 +91,6 @@ function buildMime({
       return headers.join(CRLF) + CRLF + CRLF + b64utf8(html);
     }
 
-    // Solo texto
     headers.push(
       `Content-Type: text/plain; charset=UTF-8`,
       `Content-Transfer-Encoding: base64`,
@@ -108,26 +99,22 @@ function buildMime({
     return headers.join(CRLF) + CRLF + CRLF + b64utf8(text || "");
   }
 
-  // Con adjuntos (multipart/mixed + multipart/alternative dentro)
   headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"${CRLF}`);
 
   const parts = [];
   const altBoundary = boundary + "_alt";
 
-  // Parte alternativa (texto / html)
   parts.push(`--${boundary}`);
   parts.push(
     `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
     ``
   );
 
-  // text
   parts.push(`--${altBoundary}`);
   parts.push(`Content-Type: text/plain; charset=UTF-8`);
   parts.push(`Content-Transfer-Encoding: base64`, ``);
   parts.push(b64utf8(text || ""));
 
-  // html
   if (html) {
     parts.push(`--${altBoundary}`);
     parts.push(`Content-Type: text/html; charset=UTF-8`);
@@ -136,7 +123,6 @@ function buildMime({
   }
   parts.push(`--${altBoundary}--`, ``);
 
-  // adjuntos (ya los tenías en base64, lo dejamos igual)
   for (const a of attachments || []) {
     let content = null;
     if (a.content && Buffer.isBuffer(a.content)) {
@@ -244,7 +230,6 @@ async function sendViaGmailAPI({
   return { messageId: json.id || null, provider: "gmailapi" };
 }
 
-// ===== Resend (opcional, solo si pones RESEND_API_KEY) =====
 function mapAttachmentsForResend(attachments) {
   if (!attachments || !attachments.length) return undefined;
   return attachments.map((a) => {
@@ -301,7 +286,6 @@ async function sendViaResend({
   return { messageId: json?.id || null, provider: "resend" };
 }
 
-// ===== API unificada =====
 export async function sendMail({
   to,
   subject,
@@ -341,7 +325,6 @@ export async function sendMail({
     });
   }
 
-  // Si alguien deja MAIL_PROVIDER vacío, intentamos Gmail API y luego Resend si existe
   try {
     return await sendViaGmailAPI({
       to,
