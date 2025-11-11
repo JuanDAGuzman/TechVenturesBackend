@@ -1,4 +1,3 @@
-// backend/routes/public.js
 import express from "express";
 import dayjs from "dayjs";
 import { query } from "../db.js";
@@ -11,7 +10,6 @@ import {
 
 const router = express.Router();
 
-/* ================= Helpers ================= */
 function isValidEmail(s) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 }
@@ -43,12 +41,10 @@ function minutesBetween(a, b) {
   return bh * 60 + bm - (ah * 60 + am);
 }
 
-/* ================= Env limits ================= */
 const LIMIT_SHIP_WEEK = Number(
   process.env.BOOKING_LIMIT_SHIPPING_PER_WEEK || 3
 );
 
-/* ================= Availability ================= */
 router.get("/availability", async (req, res) => {
   try {
     const { date, type } = req.query;
@@ -65,7 +61,6 @@ router.get("/availability", async (req, res) => {
   }
 });
 
-/* ================= Shipping options ================= */
 router.get("/shipping-options", async (req, res) => {
   try {
     const raw = (req.query.city || "").trim();
@@ -88,29 +83,77 @@ router.get("/shipping-options", async (req, res) => {
   }
 });
 
-/* ================= Create appointment ================= */
+router.get("/customer-by-id", async (req, res) => {
+  try {
+    const { id_number } = req.query;
+
+    if (!id_number || !onlyDigits(toDigits(id_number))) {
+      return res.status(400).json({ ok: false, error: "INVALID_ID" });
+    }
+
+    const idDigits = toDigits(id_number);
+
+    const result = await query(
+      `SELECT 
+        customer_name,
+        customer_email,
+        customer_phone,
+        customer_id_number,
+        shipping_address,
+        shipping_neighborhood,
+        shipping_city
+       FROM appointments
+       WHERE customer_id_number = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [idDigits]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ ok: true, found: false });
+    }
+
+    const customer = result.rows[0];
+
+    return res.json({
+      ok: true,
+      found: true,
+      data: {
+        customer_name: customer.customer_name,
+        customer_email: customer.customer_email,
+        customer_phone: customer.customer_phone,
+        customer_id_number: customer.customer_id_number,
+        shipping_address: customer.shipping_address || "",
+        shipping_neighborhood: customer.shipping_neighborhood || "",
+        shipping_city: customer.shipping_city || "",
+      },
+    });
+  } catch (err) {
+    console.error("[customer-by-id] error:", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 router.post("/appointments", async (req, res) => {
   try {
     const {
-      type_code, // TRYOUT | PICKUP | SHIPPING
-      date, // YYYY-MM-DD
-      start_time, // HH:MM
-      end_time, // opcional
+      type_code, 
+      date, 
+      start_time, 
+      end_time, 
       product,
       customer_name,
       customer_email,
       customer_phone,
       customer_id_number,
-      delivery_method, // IN_PERSON | SHIPPING
+      delivery_method, 
       notes,
-      // envío
       shipping_address,
       shipping_neighborhood,
       shipping_city,
       shipping_carrier,
     } = req.body || {};
 
-    // -------- Validaciones base --------
     if (
       !type_code ||
       !date ||
@@ -130,12 +173,10 @@ router.post("/appointments", async (req, res) => {
       return res.status(400).json({ ok: false, error: "INVALID_ID" });
     }
 
-    // Normalizaciones
     const emailNorm = toEmailNorm(customer_email);
     const phoneDigits = toDigits(customer_phone);
     const idDigits = toDigits(customer_id_number);
 
-    // -------- Reglas por tipo --------
     let finalStart = start_time || null;
     let finalEnd = null;
 
@@ -143,7 +184,6 @@ router.post("/appointments", async (req, res) => {
       if (!start_time)
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
 
-      // Buscar la ventana que contenga el start_time: start <= t < end
       const winQ = await query(
         `SELECT
             to_char(start_time,'HH24:MI') AS s,
@@ -164,11 +204,9 @@ router.post("/appointments", async (req, res) => {
       const slotMins = Number(winQ.rows[0].slot_minutes);
       const winEnd = winQ.rows[0].e;
 
-      // Si no vino end_time, calcularlo con el tamaño de bloque de la ventana
       finalStart = start_time;
       finalEnd = end_time || addMin(start_time, slotMins);
 
-      // Tamaño exacto del bloque
       const diff = minutesBetween(finalStart, finalEnd);
       if (diff !== slotMins) {
         return res.status(400).json({
@@ -178,12 +216,10 @@ router.post("/appointments", async (req, res) => {
         });
       }
 
-      // No salirse de la ventana
       if (dayjs(`${date} ${finalEnd}`).isAfter(dayjs(`${date} ${winEnd}`))) {
         return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });
       }
 
-      // Choque exacto del slot
       const clash = await query(
         `SELECT 1 FROM appointments
           WHERE type_code=$1 AND date=$2 AND status='CONFIRMED'
@@ -209,7 +245,6 @@ router.post("/appointments", async (req, res) => {
       finalEnd = null;
     }
 
-    // ============= LIMITES ANTI-SPAM =============
     const sameDaySameType = await query(
       `SELECT 1 FROM appointments
         WHERE date = $1
@@ -232,7 +267,6 @@ router.post("/appointments", async (req, res) => {
       });
     }
 
-    // Límite semanal para SHIPPING
     if (type_code === "SHIPPING") {
       const startOfWeek = dayjs(date).startOf("week").format("YYYY-MM-DD");
       const endOfWeek = dayjs(date).endOf("week").format("YYYY-MM-DD");
@@ -259,9 +293,7 @@ router.post("/appointments", async (req, res) => {
         });
       }
     }
-    // ============= FIN LIMITES =============
 
-    // -------- INSERT --------
     const insert = await query(
       `INSERT INTO appointments (
          type_code, date, start_time, end_time, product,
@@ -291,9 +323,8 @@ router.post("/appointments", async (req, res) => {
       ]
     );
     const apptId = insert.rows[0].id;
-    const minutes = minutesBetween(finalStart, finalEnd); // null si SHIPPING
+    const minutes = minutesBetween(finalStart, finalEnd);
 
-    // -------- Emails (no bloquea la respuesta) --------
     try {
       const appointmentForEmail = {
         id: apptId,
@@ -318,7 +349,6 @@ router.post("/appointments", async (req, res) => {
         status: "CONFIRMED",
       };
 
-      // Cliente
       const { subject, html, text } =
         buildConfirmationEmail(appointmentForEmail);
       const adminBcc = (process.env.MAIL_NOTIFY || "")
@@ -336,7 +366,6 @@ router.post("/appointments", async (req, res) => {
         });
       });
 
-      // Admin (copia)
       const adminTo =
         process.env.MAIL_NOTIFY ||
         process.env.ADMIN_NOTIFY ||
