@@ -179,7 +179,7 @@ router.patch("/windows/:id", async (req, res) => {
 
 router.delete("/windows/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = req.params.id;
     const del = await query(`DELETE FROM weekday_windows WHERE id=$1`, [id]);
     return res.json({ ok: true, removed: del.rowCount });
   } catch (e) {
