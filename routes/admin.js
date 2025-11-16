@@ -467,7 +467,7 @@ router.patch("/appointments/:id", async (req, res) => {
      shipping_cost         = COALESCE($13, shipping_cost),
      shipping_trip_link    = COALESCE($14, shipping_trip_link)
     WHERE id = $15
-    RETURNING id
+    RETURNING id, customer_name, customer_id_number, customer_email, customer_phone
 
       `,
       [
@@ -492,6 +492,51 @@ router.patch("/appointments/:id", async (req, res) => {
     if (!rows.length) {
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
+
+    // 🚫 BLOQUEO AUTOMÁTICO: Si se marca como NO_SHOW, agregar a blacklist
+    if (status === "NO_SHOW") {
+      const appointment = rows[0];
+      const idNumber = appointment.customer_id_number;
+
+      // Solo bloquear si tiene cédula registrada
+      if (idNumber) {
+        try {
+          await query(
+            `INSERT INTO customer_blacklist (
+              customer_id_number,
+              customer_name,
+              customer_email,
+              customer_phone,
+              reason,
+              appointment_id,
+              notes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (customer_id_number)
+            DO UPDATE SET
+              reason = EXCLUDED.reason,
+              appointment_id = EXCLUDED.appointment_id,
+              blocked_at = now(),
+              notes = COALESCE(EXCLUDED.notes, customer_blacklist.notes)`,
+            [
+              idNumber,
+              appointment.customer_name,
+              appointment.customer_email,
+              appointment.customer_phone,
+              "NO_SHOW",
+              id,
+              "Cliente marcado automáticamente por no aparecer a su cita",
+            ]
+          );
+          console.log(
+            `[AUTO-BLACKLIST] Cliente ${idNumber} bloqueado automáticamente por NO_SHOW`
+          );
+        } catch (blErr) {
+          console.error("[AUTO-BLACKLIST] Error al bloquear cliente:", blErr);
+          // No bloqueamos la respuesta si falla el blacklist
+        }
+      }
+    }
+
     return res.json({ ok: true });
   } catch (err) {
     console.error("[admin] update appointment error:", err);
