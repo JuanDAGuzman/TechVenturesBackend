@@ -183,12 +183,12 @@ router.post("/appointments", async (req, res) => {
       if (!start_time)
         return res.status(400).json({ ok: false, error: "MISSING_SLOT" });
 
-      let winQ = await query(
+      const winQ = await query(
         `SELECT
         to_char(start_time,'HH24:MI') AS s,
         to_char(end_time,'HH24:MI')   AS e,
         slot_minutes
-     FROM weekday_windows
+     FROM availability_windows
     WHERE date=$1 AND type_code=$2
       AND start_time <= $3::time
       AND end_time   >  $3::time
@@ -196,25 +196,6 @@ router.post("/appointments", async (req, res) => {
     LIMIT 1`,
         [date, type_code, start_time]
       );
-
-      if (!winQ.rows.length) {
-        const dayOfWeek = dayjs(date).day();
-        if (dayOfWeek === 6) {
-          winQ = await query(
-            `SELECT
-            to_char(start_time,'HH24:MI') AS s,
-            to_char(end_time,'HH24:MI')   AS e,
-            slot_minutes
-         FROM saturday_windows
-        WHERE date=$1
-          AND start_time <= $2::time
-          AND end_time   >  $2::time
-        ORDER BY start_time
-        LIMIT 1`,
-            [date, start_time]
-          );
-        }
-      }
 
       if (!winQ.rows.length) {
         return res.status(400).json({ ok: false, error: "OUTSIDE_WINDOW" });

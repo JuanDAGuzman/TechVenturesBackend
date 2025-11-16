@@ -110,7 +110,7 @@ router.post("/windows", async (req, res) => {
 
     const existing = await query(
       `SELECT id, start_time, end_time
-   FROM weekday_windows WHERE date=$1 AND type_code=$2`,
+   FROM availability_windows WHERE date=$1 AND type_code=$2`,
       [date, type_code]
     );
     const clash = existing.rows.find((w) =>
@@ -122,7 +122,7 @@ router.post("/windows", async (req, res) => {
         .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
 
     const ins = await query(
-      `INSERT INTO weekday_windows(date,type_code,start_time,end_time,created_by,slot_minutes)
+      `INSERT INTO availability_windows(date,type_code,start_time,end_time,created_by,slot_minutes)
    VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
       [date, type_code, start_time, end_time, "admin", slot_minutes]
     );
@@ -135,9 +135,9 @@ router.post("/windows", async (req, res) => {
 
 router.patch("/windows/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = req.params.id;
     const { start_time, end_time, slot_minutes } = req.body || {};
-    const cur = await query(`SELECT * FROM weekday_windows WHERE id=$1`, [id]);
+    const cur = await query(`SELECT * FROM availability_windows WHERE id=$1`, [id]);
     if (!cur.rows.length)
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
 
@@ -153,7 +153,7 @@ router.patch("/windows/:id", async (req, res) => {
 
     const others = await query(
       `SELECT id, start_time, end_time
-   FROM weekday_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
+   FROM availability_windows WHERE date=$1 AND type_code=$2 AND id<>$3`,
       [row.date, row.type_code, id]
     );
     const clash = others.rows.find((w) =>
@@ -165,7 +165,7 @@ router.patch("/windows/:id", async (req, res) => {
         .json({ ok: false, error: "WINDOW_OVERLAP", meta: { id: clash.id } });
 
     await query(
-      `UPDATE weekday_windows
+      `UPDATE availability_windows
      SET start_time=$1, end_time=$2, slot_minutes=$3
    WHERE id=$4`,
       [st, en, sm, id]
@@ -180,7 +180,7 @@ router.patch("/windows/:id", async (req, res) => {
 router.delete("/windows/:id", async (req, res) => {
   try {
     const id = req.params.id;
-    const del = await query(`DELETE FROM weekday_windows WHERE id=$1`, [id]);
+    const del = await query(`DELETE FROM availability_windows WHERE id=$1`, [id]);
     return res.json({ ok: true, removed: del.rowCount });
   } catch (e) {
     console.error("[admin/windows DELETE]", e);
@@ -194,7 +194,7 @@ router.get("/windows", async (req, res) => {
     if (!date)
       return res.status(400).json({ ok: false, error: "MISSING_DATE" });
     const rows = await query(
-      `SELECT * FROM weekday_windows WHERE date=$1 AND ($2::text IS NULL OR type_code=$2)
+      `SELECT * FROM availability_windows WHERE date=$1 AND ($2::text IS NULL OR type_code=$2)
    ORDER BY start_time`,
       [date, type || null]
     );
@@ -529,145 +529,11 @@ router.delete("/appointments", async (req, res) => {
   }
 });
 
-router.post("/saturday-windows", async (req, res) => {
-  try {
-    const { date, ranges } = req.body || {};
-    if (!date || !Array.isArray(ranges) || !ranges.length) {
-      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
-    }
+// ============================================================================
+// AVAILABILITY WINDOWS - Gestión de horarios disponibles (cualquier día L-D)
+// ============================================================================
 
-    const validSlots = [15, 20, 30];
-    await query("BEGIN");
-
-    for (const r of ranges) {
-      const start = (r.start || "").trim();
-      const end = (r.end || "").trim();
-      const minutes = Number(r.slot_minutes ?? 15);
-
-      if (
-        !/^\d{2}:\d{2}$/.test(start) ||
-        !/^\d{2}:\d{2}$/.test(end) ||
-        start >= end ||
-        !validSlots.includes(minutes)
-      ) {
-        await query("ROLLBACK").catch(() => {});
-        return res
-          .status(400)
-          .json({ ok: false, error: "INVALID_TIME_OR_SLOT" });
-      }
-
-      await query(
-        `
-        INSERT INTO saturday_windows(date, start_time, end_time, created_by, slot_minutes)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (date, start_time, end_time) DO NOTHING
-        `,
-        [date, start, end, "admin", minutes]
-      );
-    }
-
-    await query("COMMIT");
-    return res.json({ ok: true });
-  } catch (err) {
-    await query("ROLLBACK").catch(() => {});
-    console.error("[admin] saturday-windows POST error:", err);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-router.get("/saturday-windows", async (req, res) => {
-  try {
-    const { date } = req.query || {};
-    if (!date)
-      return res.status(400).json({ ok: false, error: "MISSING_DATE" });
-
-    const { rows } = await query(
-      `
-      SELECT id,
-             to_char(start_time,'HH24:MI') AS start_time,
-             to_char(end_time,  'HH24:MI') AS end_time,
-             slot_minutes
-        FROM saturday_windows
-       WHERE date=$1
-       ORDER BY start_time ASC
-      `,
-      [date]
-    );
-    return res.json({ ok: true, items: rows });
-  } catch (e) {
-    console.error("[admin] saturday-windows GET error:", e);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-router.delete("/saturday-windows/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const r = await query(
-      `DELETE FROM saturday_windows WHERE id=$1 RETURNING id`,
-      [id]
-    );
-    if (!r.rowCount) {
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-    }
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error("[admin] saturday-windows DELETE by id error:", err);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-router.patch("/saturday-windows/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { start, end, slot_minutes } = req.body || {};
-    const validSlots = [15, 20, 30];
-
-    if (
-      !/^\d{2}:\d{2}$/.test(start) ||
-      !/^\d{2}:\d{2}$/.test(end) ||
-      start >= end ||
-      (slot_minutes != null && !validSlots.includes(Number(slot_minutes)))
-    ) {
-      return res.status(400).json({ ok: false, error: "INVALID_TIME_OR_SLOT" });
-    }
-
-    const r = await query(
-      `
-      UPDATE saturday_windows
-         SET start_time = $2,
-             end_time   = $3,
-             slot_minutes = COALESCE($4, slot_minutes)
-       WHERE id = $1
-       RETURNING id
-      `,
-      [id, start, end, slot_minutes ?? null]
-    );
-
-    if (!r.rowCount)
-      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[saturday-windows][PATCH]", e);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-router.delete("/saturday-windows", async (req, res) => {
-  try {
-    const { date } = req.query || {};
-    if (!date) {
-      return res.status(400).json({ ok: false, error: "MISSING_DATE" });
-    }
-    const r = await query(`DELETE FROM saturday_windows WHERE date=$1`, [date]);
-    return res.json({ ok: true, deleted: r.rowCount || 0 });
-  } catch (err) {
-    console.error("[admin] saturday-windows DELETE by date error:", err);
-    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
-});
-
-router.get("/weekday-windows", async (req, res) => {
+router.get("/availability-windows", async (req, res) => {
   try {
     const { date, type } = req.query || {};
     if (!date) {
@@ -682,7 +548,7 @@ router.get("/weekday-windows", async (req, res) => {
         to_char(start_time,'HH24:MI') AS start,
         to_char(end_time,  'HH24:MI') AS end,
         slot_minutes
-      FROM weekday_windows
+      FROM availability_windows
       WHERE date = $1
     `;
     if (type) {
@@ -694,12 +560,12 @@ router.get("/weekday-windows", async (req, res) => {
     const { rows } = await query(sql, params);
     return res.json({ ok: true, items: rows });
   } catch (e) {
-    console.error("[weekday-windows][GET]", e);
+    console.error("[availability-windows][GET]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
-router.post("/weekday-windows", async (req, res) => {
+router.post("/availability-windows", async (req, res) => {
   try {
     const { date, type, ranges } = req.body || {};
     if (!date || !type || !Array.isArray(ranges) || !ranges.length) {
@@ -712,7 +578,7 @@ router.post("/weekday-windows", async (req, res) => {
     for (const r of ranges) {
       const start = String(r.start || "");
       const end = String(r.end || "");
-      const minutes = Number(r.slot_minutes ?? 15); // 🔥 AGREGAR VALOR POR DEFECTO
+      const minutes = Number(r.slot_minutes ?? 15);
 
       if (
         !/^\d{2}:\d{2}$/.test(start) ||
@@ -728,7 +594,7 @@ router.post("/weekday-windows", async (req, res) => {
       }
 
       await query(
-        `INSERT INTO weekday_windows(date,type_code,start_time,end_time,created_by,slot_minutes)
+        `INSERT INTO availability_windows(date,type_code,start_time,end_time,created_by,slot_minutes)
          VALUES ($1,$2,$3,$4,$5,$6)
          ON CONFLICT DO NOTHING`,
         [date, type, start, end, "admin", minutes]
@@ -738,12 +604,12 @@ router.post("/weekday-windows", async (req, res) => {
     return res.json({ ok: true });
   } catch (e) {
     await query("ROLLBACK").catch(() => {});
-    console.error("[weekday-windows][POST]", e);
+    console.error("[availability-windows][POST]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
-router.patch("/weekday-windows/:id", async (req, res) => {
+router.patch("/availability-windows/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { start, end } = req.body || {};
@@ -755,7 +621,7 @@ router.patch("/weekday-windows/:id", async (req, res) => {
       return res.status(400).json({ ok: false, error: "INVALID_TIME" });
     }
     const { rows: cur } = await query(
-      `SELECT date, type_code FROM weekday_windows WHERE id=$1`,
+      `SELECT date, type_code FROM availability_windows WHERE id=$1`,
       [id]
     );
     if (!cur.length)
@@ -765,7 +631,7 @@ router.patch("/weekday-windows/:id", async (req, res) => {
     const { rows: overlap } = await query(
       `
       SELECT 1
-        FROM weekday_windows
+        FROM availability_windows
        WHERE date=$1 AND type_code=$2 AND id<>$3
          AND NOT ($4 >= end_time OR $5 <= start_time)
       `,
@@ -776,14 +642,31 @@ router.patch("/weekday-windows/:id", async (req, res) => {
     }
 
     await query(
-      `UPDATE weekday_windows
+      `UPDATE availability_windows
           SET start_time=$2, end_time=$3
         WHERE id=$1`,
       [id, start, end]
     );
     return res.json({ ok: true });
   } catch (e) {
-    console.error("[PATCH weekday-windows/:id]", e);
+    console.error("[PATCH availability-windows/:id]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.delete("/availability-windows/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await query(
+      `DELETE FROM availability_windows WHERE id=$1 RETURNING id`,
+      [id]
+    );
+    if (!r.rowCount) {
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[availability-windows][DELETE]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });

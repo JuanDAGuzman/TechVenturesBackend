@@ -114,58 +114,31 @@ CREATE INDEX IF NOT EXISTS idx_appt_rem_30m_scan
   ON appointments (status, type_code, date, reminded_30m_at, start_time);
 
 -- ============================================================================
--- Disponibilidad de sábados
+-- Disponibilidad para cualquier día (L-D) - availability_windows
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS saturday_windows (
-  id          BIGSERIAL PRIMARY KEY,
-  date        DATE NOT NULL,     -- sábado específico
-  start_time  TIME NOT NULL,
-  end_time    TIME NOT NULL,
-  created_by  TEXT NOT NULL DEFAULT 'admin',
-  created_at  TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- evita duplicados exactos en una misma fecha
-CREATE UNIQUE INDEX IF NOT EXISTS ux_saturday_windows_unique
-  ON saturday_windows(date, start_time, end_time);
-
-CREATE INDEX IF NOT EXISTS idx_saturday_windows_date
-  ON saturday_windows(date);
-
-CREATE INDEX IF NOT EXISTS idx_saturday_windows_range
-  ON saturday_windows(date, start_time, end_time);
-
--- Slot size de sábados
-ALTER TABLE saturday_windows
-  ADD COLUMN IF NOT EXISTS slot_minutes INTEGER NOT NULL DEFAULT 15;
-
--- ============================================================================
--- Disponibilidad manual entre semana (weekday_windows)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS weekday_windows (
+CREATE TABLE IF NOT EXISTS availability_windows (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   date         DATE        NOT NULL,
   type_code    TEXT        NOT NULL CHECK (type_code IN ('TRYOUT','PICKUP')),
   start_time   TIME        NOT NULL,
   end_time     TIME        NOT NULL,
+  slot_minutes INTEGER     NOT NULL DEFAULT 15 CHECK (slot_minutes IN (15,20,30)),
   created_by   TEXT        NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_weekday_windows_unique
-  ON weekday_windows(date, type_code, start_time, end_time);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_availability_windows_unique
+  ON availability_windows(date, type_code, start_time, end_time);
 
-CREATE INDEX IF NOT EXISTS idx_weekday_windows_date
-  ON weekday_windows(date);
+CREATE INDEX IF NOT EXISTS idx_availability_windows_date
+  ON availability_windows(date);
 
-CREATE INDEX IF NOT EXISTS idx_weekday_windows_type_date
-  ON weekday_windows(type_code, date);
+CREATE INDEX IF NOT EXISTS idx_availability_windows_type_date
+  ON availability_windows(type_code, date);
 
--- Slot size de L–V
-ALTER TABLE weekday_windows
-  ADD COLUMN IF NOT EXISTS slot_minutes INTEGER NOT NULL DEFAULT 15;
+COMMENT ON TABLE availability_windows IS
+  'Ventanas de disponibilidad para cualquier día de la semana (L-D). Cada ventana es específica por fecha y tipo de cita (TRYOUT/PICKUP).';
 
 -- ============================================================================
 -- Ventanas manuales de disponibilidad (L–V) para panel nuevo
