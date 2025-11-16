@@ -670,4 +670,121 @@ router.delete("/availability-windows/:id", async (req, res) => {
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
+
+// ============================================================================
+// BLACKLIST - Gestión de clientes bloqueados
+// ============================================================================
+
+// Buscar cliente por cédula
+router.get("/search-customer", async (req, res) => {
+  try {
+    const { id_number } = req.query;
+    if (!id_number) {
+      return res.status(400).json({ ok: false, error: "MISSING_ID_NUMBER" });
+    }
+
+    // Buscar en appointments
+    const { rows } = await query(
+      `SELECT
+        customer_name,
+        customer_id_number,
+        customer_email,
+        customer_phone,
+        COUNT(*) as total_appointments,
+        COUNT(*) FILTER (WHERE status = 'NO_SHOW') as no_shows,
+        COUNT(*) FILTER (WHERE status = 'CONFIRMED') as confirmed,
+        COUNT(*) FILTER (WHERE status = 'DONE') as completed,
+        COUNT(*) FILTER (WHERE status = 'CANCELLED') as cancelled
+      FROM appointments
+      WHERE customer_id_number = $1
+      GROUP BY customer_name, customer_id_number, customer_email, customer_phone
+      LIMIT 1`,
+      [id_number]
+    );
+
+    if (!rows.length) {
+      return res.json({ ok: true, found: false });
+    }
+
+    // Verificar si está en blacklist
+    const { rows: blacklisted } = await query(
+      `SELECT * FROM customer_blacklist WHERE customer_id_number = $1`,
+      [id_number]
+    );
+
+    return res.json({
+      ok: true,
+      found: true,
+      customer: rows[0],
+      blacklisted: blacklisted.length > 0,
+      blacklist_info: blacklisted[0] || null,
+    });
+  } catch (err) {
+    console.error("[search-customer]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Listar todos los clientes en blacklist
+router.get("/blacklist", async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT * FROM customer_blacklist ORDER BY blocked_at DESC`
+    );
+    return res.json({ ok: true, items: rows });
+  } catch (err) {
+    console.error("[blacklist][GET]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Agregar cliente a blacklist
+router.post("/blacklist", async (req, res) => {
+  try {
+    const { customer_id_number, customer_name, customer_email, customer_phone, reason, appointment_id, notes } = req.body;
+
+    if (!customer_id_number || !customer_name || !reason) {
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    }
+
+    const { rows } = await query(
+      `INSERT INTO customer_blacklist
+        (customer_id_number, customer_name, customer_email, customer_phone, reason, appointment_id, notes, blocked_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'admin')
+       ON CONFLICT (customer_id_number)
+       DO UPDATE SET
+         reason = EXCLUDED.reason,
+         notes = EXCLUDED.notes,
+         blocked_at = NOW()
+       RETURNING *`,
+      [customer_id_number, customer_name, customer_email, customer_phone, reason, appointment_id || null, notes || null]
+    );
+
+    return res.json({ ok: true, blacklist: rows[0] });
+  } catch (err) {
+    console.error("[blacklist][POST]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Eliminar cliente de blacklist (desbloquear)
+router.delete("/blacklist/:id_number", async (req, res) => {
+  try {
+    const { id_number } = req.params;
+    const { rowCount } = await query(
+      `DELETE FROM customer_blacklist WHERE customer_id_number = $1`,
+      [id_number]
+    );
+
+    if (rowCount === 0) {
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[blacklist][DELETE]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 export default router;

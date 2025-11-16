@@ -61,13 +61,13 @@ BEGIN
       CHECK (delivery_method IN ('IN_PERSON','SHIPPING'));
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'chk_status_known'
-  ) THEN
-    ALTER TABLE appointments
-      ADD CONSTRAINT chk_status_known
-      CHECK (status IN ('CONFIRMED','CANCELLED','DONE','SHIPPED'));
-  END IF;
+  -- Primero eliminar constraint anterior si existe
+  ALTER TABLE appointments DROP CONSTRAINT IF EXISTS chk_status_known;
+
+  -- Agregar nuevo constraint con NO_SHOW
+  ALTER TABLE appointments
+    ADD CONSTRAINT chk_status_known
+    CHECK (status IN ('CONFIRMED','CANCELLED','DONE','SHIPPED','NO_SHOW'));
 END$$;
 
 -- 4) Trigger para updated_at (seguro)
@@ -180,3 +180,37 @@ WHERE slot_minutes IS NULL
 ALTER TABLE appointments
   ADD COLUMN IF NOT EXISTS reminded_1h_at  TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS reminded_30m_at TIMESTAMPTZ;
+
+-- ============================================================================
+-- Sistema de Blacklist (clientes bloqueados)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS customer_blacklist (
+  id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  customer_id_number TEXT NOT NULL UNIQUE,
+  customer_name     TEXT NOT NULL,
+  customer_email    TEXT,
+  customer_phone    TEXT,
+  reason            TEXT NOT NULL,
+  blocked_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  blocked_by        TEXT DEFAULT 'admin',
+  appointment_id    UUID REFERENCES appointments(id),
+  notes             TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_blacklist_id_number
+  ON customer_blacklist(customer_id_number);
+
+COMMENT ON TABLE customer_blacklist IS
+  'Lista de clientes bloqueados por incumplimiento de citas o comportamiento inapropiado';
+
+-- Función helper para verificar si un cliente está en blacklist
+CREATE OR REPLACE FUNCTION is_customer_blacklisted(id_number TEXT)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM customer_blacklist
+    WHERE customer_id_number = id_number
+  );
+END;
+$$ LANGUAGE plpgsql;

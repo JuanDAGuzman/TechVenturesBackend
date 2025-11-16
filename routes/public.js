@@ -177,6 +177,27 @@ router.post("/appointments", async (req, res) => {
     const phoneDigits = toDigits(customer_phone);
     const idDigits = toDigits(customer_id_number);
 
+    // ⚠️ VERIFICAR SI EL CLIENTE ESTÁ EN BLACKLIST
+    if (idDigits) {
+      const blacklistCheck = await query(
+        `SELECT * FROM customer_blacklist WHERE customer_id_number = $1`,
+        [idDigits]
+      );
+      if (blacklistCheck.rows.length > 0) {
+        const bl = blacklistCheck.rows[0];
+        return res.status(403).json({
+          ok: false,
+          error: "CUSTOMER_BLACKLISTED",
+          message: "No puedes agendar citas. Has incumplido previamente y debes contactar con el administrador.",
+          blacklist_info: {
+            reason: bl.reason,
+            blocked_at: bl.blocked_at,
+            notes: bl.notes,
+          },
+        });
+      }
+    }
+
     let finalStart = start_time || null;
     let finalEnd = null;
     if (type_code === "TRYOUT" || type_code === "PICKUP") {
