@@ -7,7 +7,7 @@ import { fileURLToPath } from "url";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import http from "http";
 
-import { startRemindersWorker } from "./workers/reminders.js";
+
 import publicRoutes from "./routes/public.js";
 import adminRoutes from "./routes/admin.js";
 import diagnostics from "./routes/diagnostics.js";
@@ -199,7 +199,7 @@ const PORT = Number(process.env.PORT || 4000);
       await ensureAppointmentsMinutesColumn();
     }
 
-    verifySMTP().catch(() => {});
+    verifySMTP().catch(() => { });
 
     const server = http.createServer(app);
     server.requestTimeout = 30_000;
@@ -215,4 +215,4 @@ const PORT = Number(process.env.PORT || 4000);
   }
 })();
 
-startRemindersWorker();
+
