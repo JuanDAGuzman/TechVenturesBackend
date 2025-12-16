@@ -568,7 +568,7 @@ router.delete("/appointments", async (req, res) => {
 
     return res.json({ ok: true, deleted: r.rowCount || 0 });
   } catch (err) {
-    await query("ROLLBACK").catch(() => {});
+    await query("ROLLBACK").catch(() => { });
     console.error("[admin] delete appointments error:", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
@@ -630,11 +630,11 @@ router.post("/availability-windows", async (req, res) => {
         !/^\d{2}:\d{2}$/.test(end) ||
         start >= end
       ) {
-        await query("ROLLBACK").catch(() => {});
+        await query("ROLLBACK").catch(() => { });
         return res.status(400).json({ ok: false, error: "INVALID_TIME" });
       }
       if (!validSlots.includes(minutes)) {
-        await query("ROLLBACK").catch(() => {});
+        await query("ROLLBACK").catch(() => { });
         return res.status(400).json({ ok: false, error: "INVALID_SLOT" });
       }
 
@@ -648,7 +648,7 @@ router.post("/availability-windows", async (req, res) => {
     await query("COMMIT");
     return res.json({ ok: true });
   } catch (e) {
-    await query("ROLLBACK").catch(() => {});
+    await query("ROLLBACK").catch(() => { });
     console.error("[availability-windows][POST]", e);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
@@ -720,49 +720,56 @@ router.delete("/availability-windows/:id", async (req, res) => {
 // BLACKLIST - Gestión de clientes bloqueados
 // ============================================================================
 
-// Buscar cliente por cédula
+// Buscar cliente por cédula, nombre o teléfono
 router.get("/search-customer", async (req, res) => {
   try {
-    const { id_number } = req.query;
-    if (!id_number) {
-      return res.status(400).json({ ok: false, error: "MISSING_ID_NUMBER" });
+    const { q } = req.query;
+    if (!q) {
+      return res.status(400).json({ ok: false, error: "MISSING_QUERY" });
     }
+
+    const searchTerm = `%${q.trim()}%`;
 
     // Buscar en appointments
+    // Hacemos LEFT JOIN con blacklist para traer el estado de una vez
+    // Agrupamos por los datos del cliente para consolidar estadísticas
     const { rows } = await query(
       `SELECT
-        customer_name,
-        customer_id_number,
-        customer_email,
-        customer_phone,
-        COUNT(*) as total_appointments,
-        COUNT(*) FILTER (WHERE status = 'NO_SHOW') as no_shows,
-        COUNT(*) FILTER (WHERE status = 'CONFIRMED') as confirmed,
-        COUNT(*) FILTER (WHERE status = 'DONE') as completed,
-        COUNT(*) FILTER (WHERE status = 'CANCELLED') as cancelled
-      FROM appointments
-      WHERE customer_id_number = $1
-      GROUP BY customer_name, customer_id_number, customer_email, customer_phone
-      LIMIT 1`,
-      [id_number]
-    );
-
-    if (!rows.length) {
-      return res.json({ ok: true, found: false });
-    }
-
-    // Verificar si está en blacklist
-    const { rows: blacklisted } = await query(
-      `SELECT * FROM customer_blacklist WHERE customer_id_number = $1`,
-      [id_number]
+        a.customer_name,
+        a.customer_id_number,
+        a.customer_email,
+        a.customer_phone,
+        COUNT(a.id) as total_appointments,
+        COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW') as no_shows,
+        COUNT(a.id) FILTER (WHERE a.status = 'CONFIRMED') as confirmed,
+        COUNT(a.id) FILTER (WHERE a.status = 'DONE') as completed,
+        COUNT(a.id) FILTER (WHERE a.status = 'CANCELLED') as cancelled,
+        b.reason as blacklist_reason,
+        b.blocked_at as blacklist_date,
+        b.notes as blacklist_notes,
+        CASE WHEN b.customer_id_number IS NOT NULL THEN true ELSE false END as is_blacklisted
+      FROM appointments a
+      LEFT JOIN customer_blacklist b ON a.customer_id_number = b.customer_id_number
+      WHERE
+        a.customer_id_number ILIKE $1 OR
+        a.customer_phone ILIKE $1 OR
+        a.customer_name ILIKE $1
+      GROUP BY
+        a.customer_name,
+        a.customer_id_number,
+        a.customer_email,
+        a.customer_phone,
+        b.customer_id_number,
+        b.reason,
+        b.blocked_at,
+        b.notes
+      LIMIT 50`,
+      [searchTerm]
     );
 
     return res.json({
       ok: true,
-      found: true,
-      customer: rows[0],
-      blacklisted: blacklisted.length > 0,
-      blacklist_info: blacklisted[0] || null,
+      items: rows,
     });
   } catch (err) {
     console.error("[search-customer]", err);
