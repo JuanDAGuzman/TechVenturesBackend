@@ -3,6 +3,8 @@ import { query } from "../db.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import os from "os";
+import { spawn } from "child_process";
 
 import { buildShippedEmail } from "../services/emailTemplates.js";
 import { sendMail } from "../services/mailer.js";
@@ -37,6 +39,62 @@ router.use((req, res, next) => {
     return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
   }
   next();
+});
+
+// ── OCR: extraer número de guía y valor desde imagen ────────────────────────
+router.post("/extract-guide", async (req, res) => {
+  const { imageBase64, filename = "guide.jpg" } = req.body || {};
+
+  if (!imageBase64) {
+    return res.status(400).json({ ok: false, error: "NO_IMAGE" });
+  }
+
+  const ext = path.extname(filename).toLowerCase() || ".jpg";
+  const tmpPath = path.join(os.tmpdir(), `ocr_${Date.now()}${ext}`);
+
+  try {
+    // Guardar imagen temporal
+    fs.writeFileSync(tmpPath, Buffer.from(imageBase64, "base64"));
+
+    const scriptPath = path.join(__dirname, "..", "ocr", "extract_guide.py");
+
+    const pythonCmd = process.platform === "win32" ? "python" : "python3";
+    const result = await new Promise((resolve, reject) => {
+      const py = spawn(pythonCmd, [scriptPath, tmpPath]);
+
+      let stdout = "";
+      let stderr = "";
+
+      py.stdout.on("data", (d) => (stdout += d));
+      py.stderr.on("data", (d) => (stderr += d));
+
+      const timeout = setTimeout(() => {
+        py.kill();
+        reject(new Error("OCR_TIMEOUT"));
+      }, 30000);
+
+      py.on("close", (code) => {
+        clearTimeout(timeout);
+        if (code !== 0) {
+          console.error("[extract-guide] Python stderr:", stderr);
+          reject(new Error(`Python exited ${code}: ${stderr.slice(0, 200)}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout.trim()));
+        } catch {
+          reject(new Error("JSON_PARSE_ERROR"));
+        }
+      });
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error("[extract-guide] error:", err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch { /* ya fue borrado */ }
+  }
 });
 
 router.post("/appointments/:id/upload-guide", async (req, res) => {
