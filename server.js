@@ -8,6 +8,8 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import http from "http";
 
 
+import cron from "node-cron";
+
 import publicRoutes from "./routes/public.js";
 import adminRoutes from "./routes/admin.js";
 import diagnostics from "./routes/diagnostics.js";
@@ -190,6 +192,27 @@ async function ensureAppointmentsMinutesColumn() {
 
 const PORT = Number(process.env.PORT || 4000);
 
+// ── Auto-marcar citas pasadas como DONE ──────────────────────────────────────
+async function autoMarkDone() {
+  try {
+    const result = await query(`
+      UPDATE appointments
+      SET status = 'DONE'
+      WHERE status = 'CONFIRMED'
+        AND type_code IN ('TRYOUT', 'PICKUP')
+        AND date < (NOW() AT TIME ZONE 'America/Bogota')::date
+    `);
+    if (result.rowCount > 0) {
+      console.log(`[auto-done] ${result.rowCount} cita(s) marcadas como DONE automáticamente`);
+    }
+  } catch (e) {
+    console.error("[auto-done] Error:", e.message);
+  }
+}
+
+// Corre todos los días a las 3 AM hora Bogotá
+cron.schedule("0 3 * * *", autoMarkDone, { timezone: "America/Bogota" });
+
 (async () => {
   try {
     if (process.env.APPLY_SCHEMA_ON_BOOT === "1") {
@@ -198,6 +221,9 @@ const PORT = Number(process.env.PORT || 4000);
     }
 
     verifySMTP().catch(() => { });
+
+    // Limpiar citas pasadas que quedaron sin marcar (al arrancar el servidor)
+    autoMarkDone();
 
     const server = http.createServer(app);
     server.requestTimeout = 30_000;
