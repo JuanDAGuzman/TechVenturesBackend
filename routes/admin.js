@@ -18,6 +18,24 @@ const GUIDES_DIR = path.join(__dirname, "..", "uploads", "shipping-guides");
 
 fs.mkdirSync(GUIDES_DIR, { recursive: true });
 
+function guideAttachment(publicUrl) {
+  if (!publicUrl) return null;
+  // publicUrl viene como /uploads/shipping-guides/filename.ext
+  const filePath = path.join(__dirname, "..", publicUrl);
+  if (!fs.existsSync(filePath)) return null;
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png",  ".pdf": "application/pdf",
+    ".gif": "image/gif",  ".webp": "image/webp",
+  };
+  return {
+    filename: `guia${ext}`,
+    path: filePath,
+    contentType: mimeMap[ext] || "application/octet-stream",
+  };
+}
+
 function toMin(hhmm = "") {
   const [h, m] = String(hhmm).slice(0, 5).split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
@@ -432,12 +450,14 @@ router.patch("/appointments/:id/ship", async (req, res) => {
         .map((s) => s.trim())
         .filter(Boolean);
 
+      const attachment = guideAttachment(publicUrl);
       await sendMail({
         to: updated.customer_email,
         subject,
         html,
         text,
         ...(adminBcc.length ? { bcc: adminBcc } : {}),
+        ...(attachment ? { attachments: [attachment] } : {}),
       });
 
       console.log("[ship-email] Correo enviado al cliente");
@@ -463,6 +483,7 @@ router.patch("/appointments/:id/ship", async (req, res) => {
           subject: `Copia — ${subject}`,
           html,
           text,
+          ...(attachment ? { attachments: [attachment] } : {}),
         });
         console.log("[ship-email] Correo enviado al admin");
       }
