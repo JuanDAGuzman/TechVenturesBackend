@@ -129,5 +129,18 @@ export async function getAvailability({ dbQuery, date, type }) {
     }
   }
 
-  return { date, slots: uniq };
+  // Filtrar slots pasados cuando la fecha pedida es hoy en Bogotá (UTC-5)
+  const nowBogota = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  const todayBogota = nowBogota.toISOString().slice(0, 10);
+  const nowMinutes = nowBogota.getUTCHours() * 60 + nowBogota.getUTCMinutes();
+
+  const slots =
+    date === todayBogota
+      ? uniq.filter((s) => {
+          const [h, m] = s.start.split(":").map(Number);
+          return h * 60 + m > nowMinutes;
+        })
+      : uniq;
+
+  return { date, slots };
 }

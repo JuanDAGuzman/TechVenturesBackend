@@ -183,6 +183,8 @@ router.post("/windows", async (req, res) => {
       return res.status(400).json({ ok: false, error: "INVALID_SLOT_SIZE" });
     if (minutesBetween(start_time, end_time) <= 0)
       return res.status(400).json({ ok: false, error: "INVALID_RANGE" });
+    if (slot_minutes > minutesBetween(start_time, end_time))
+      return res.status(400).json({ ok: false, error: "SLOT_EXCEEDS_WINDOW" });
 
     const existing = await query(
       `SELECT id, start_time, end_time
