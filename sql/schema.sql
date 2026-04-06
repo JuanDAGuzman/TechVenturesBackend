@@ -40,7 +40,8 @@ ALTER TABLE appointments
   ADD COLUMN IF NOT EXISTS shipped_at             TIMESTAMP NULL,
   ADD COLUMN IF NOT EXISTS reminded_once_at       TIMESTAMP NULL,
   ADD COLUMN IF NOT EXISTS shipping_cost          NUMERIC(12,2) NULL,
-  ADD COLUMN IF NOT EXISTS shipping_trip_link     TEXT NULL;
+  ADD COLUMN IF NOT EXISTS shipping_trip_link     TEXT NULL,
+  ADD COLUMN IF NOT EXISTS delivery_code          TEXT NULL;
 
 -- 3) Constraints (añadir solo si no existen)
 DO $$
@@ -180,6 +181,24 @@ WHERE slot_minutes IS NULL
 ALTER TABLE appointments
   ADD COLUMN IF NOT EXISTS reminded_1h_at  TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS reminded_30m_at TIMESTAMPTZ;
+
+-- ============================================================================
+-- Evidencia fotográfica para envíos Picap/InDrive (temporal, se limpia en 24h)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS picap_evidence (
+  id             SERIAL PRIMARY KEY,
+  appointment_id UUID NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+  filename       TEXT NOT NULL DEFAULT 'evidencia.jpg',
+  file_data      BYTEA NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_picap_evidence_appointment
+  ON picap_evidence(appointment_id);
+
+CREATE INDEX IF NOT EXISTS idx_picap_evidence_created_at
+  ON picap_evidence(created_at);
 
 -- ============================================================================
 -- Sistema de Blacklist (clientes bloqueados)

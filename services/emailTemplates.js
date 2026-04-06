@@ -428,6 +428,8 @@ export function buildShippedEmail(appt, opts = {}) {
     publicUrl = null,
     shippingCost = null,
     rideUrl = null,
+    deliveryCode = null,
+    evidenceCount = 0,
     adminCopy = false,
   } = opts;
 
@@ -455,6 +457,18 @@ export function buildShippedEmail(appt, opts = {}) {
         </td>
       </tr>
     `;
+    if (deliveryCode) {
+      trackingInfo += `
+      <tr>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;">
+          <strong style="color: #374151;">Código de entrega:</strong>
+        </td>
+        <td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb; text-align: right;">
+          <span style="font-size: 22px; font-weight: 800; letter-spacing: 6px; color: #111827; font-family: monospace;">${deliveryCode}</span>
+        </td>
+      </tr>
+      `;
+    }
   } else if (trackingNumber) {
     trackingInfo = detailRow("Número de guía", trackingNumber);
 
@@ -485,6 +499,8 @@ export function buildShippedEmail(appt, opts = {}) {
 
   const instructions = `<strong>¿Qué sigue?</strong><br>
     • Usa el ${isPicap ? "link" : "número de guía"} para hacer seguimiento.<br>
+    ${deliveryCode ? `• Cuando llegue el mensajero, entrégale el código <strong>${deliveryCode}</strong> para confirmar la recepción.<br>` : ""}
+    ${evidenceCount > 0 ? `• Adjuntamos ${evidenceCount} foto(s) de evidencia del embalaje para tu registro.<br>` : ""}
     ${
       !isPicap
         ? "• Al recibir, cancelas el costo del envío/servicio (si aplica)."
@@ -527,6 +543,7 @@ ${
     : ""
 }
 ${isPicap && rideUrl ? `Link del viaje: ${rideUrl}` : ""}
+${deliveryCode ? `Código de entrega: ${deliveryCode} (entrégalo al mensajero)` : ""}
 ${!isPicap && fullGuideUrl ? `Ver guía: ${fullGuideUrl}` : ""}
 
 ${

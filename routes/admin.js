@@ -115,6 +115,35 @@ router.post("/extract-guide", async (req, res) => {
   }
 });
 
+// ── Evidencia fotográfica para envíos Picap/InDrive ─────────────────────────
+router.post("/appointments/:id/evidence", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { photos } = req.body || {};
+
+    if (!Array.isArray(photos) || photos.length === 0)
+      return res.status(400).json({ ok: false, error: "NO_PHOTOS" });
+    if (photos.length > 5)
+      return res.status(400).json({ ok: false, error: "TOO_MANY_PHOTOS" });
+
+    // Reemplazar evidencia anterior del mismo envío
+    await query(`DELETE FROM picap_evidence WHERE appointment_id = $1`, [id]);
+
+    for (const photo of photos) {
+      const buffer = Buffer.from(photo.data, "base64");
+      await query(
+        `INSERT INTO picap_evidence (appointment_id, filename, file_data) VALUES ($1, $2, $3)`,
+        [id, photo.filename || "evidencia.jpg", buffer]
+      );
+    }
+
+    return res.json({ ok: true, count: photos.length });
+  } catch (err) {
+    console.error("[evidence] error:", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 router.post("/appointments/:id/upload-guide", async (req, res) => {
   try {
     const { id } = req.params;
@@ -397,6 +426,7 @@ router.patch("/appointments/:id/ship", async (req, res) => {
         ? null
         : Number(shipping_cost_raw);
     const shipping_trip_link = (body.shipping_trip_link || "").trim();
+    const delivery_code = (body.delivery_code || "").trim() || null;
 
     // La URL del archivo ya está en la BD (si se subió antes)
     const publicUrl = appt.tracking_file_url || null;
@@ -412,10 +442,11 @@ router.patch("/appointments/:id/ship", async (req, res) => {
               tracking_number    = NULL,
               shipping_cost      = COALESCE($2, shipping_cost),
               shipping_trip_link = $3,
+              delivery_code      = $4,
               shipped_at         = NOW()
           WHERE id = $1
         `,
-        [id, shipping_cost, shipping_trip_link]
+        [id, shipping_cost, shipping_trip_link, delivery_code]
       );
     } else {
       if (!tracking_number) {
@@ -439,12 +470,36 @@ router.patch("/appointments/:id/ship", async (req, res) => {
     ]);
     const updated = r2[0];
 
+    // Cargar fotos de evidencia Picap si existen
+    let evidenceAttachments = [];
+    if (carrier === "PICAP") {
+      try {
+        const evQ = await query(
+          `SELECT filename, file_data FROM picap_evidence WHERE appointment_id = $1 ORDER BY id`,
+          [id]
+        );
+        evidenceAttachments = evQ.rows.map((row, i) => {
+          const ext = path.extname(row.filename || "").toLowerCase() || ".jpg";
+          const mimeMap = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
+          return {
+            filename: `evidencia_${i + 1}${ext}`,
+            content: row.file_data,
+            contentType: mimeMap[ext] || "image/jpeg",
+          };
+        });
+      } catch (e) {
+        console.error("[ship-evidence] Error cargando fotos:", e);
+      }
+    }
+
     try {
       const { subject, html, text } = buildShippedEmail(updated, {
         trackingNumber: carrier === "PICAP" ? null : tracking_number,
         publicUrl: carrier === "PICAP" ? null : publicUrl,
         shippingCost: shipping_cost,
         rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
+        deliveryCode: carrier === "PICAP" ? delivery_code : null,
+        evidenceCount: evidenceAttachments.length,
       });
 
       const adminBcc = (process.env.MAIL_NOTIFY || "")
@@ -452,14 +507,19 @@ router.patch("/appointments/:id/ship", async (req, res) => {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const attachment = guideAttachment(publicUrl);
+      const guideAtt = guideAttachment(publicUrl);
+      const attachments = [
+        ...(guideAtt ? [guideAtt] : []),
+        ...evidenceAttachments,
+      ];
+
       await sendMail({
         to: updated.customer_email,
         subject,
         html,
         text,
         ...(adminBcc.length ? { bcc: adminBcc } : {}),
-        ...(attachment ? { attachments: [attachment] } : {}),
+        ...(attachments.length ? { attachments } : {}),
       });
 
       console.log("[ship-email] Correo enviado al cliente");
@@ -478,14 +538,21 @@ router.patch("/appointments/:id/ship", async (req, res) => {
           publicUrl: carrier === "PICAP" ? null : publicUrl,
           shippingCost: shipping_cost,
           rideUrl: carrier === "PICAP" ? shipping_trip_link : null,
+          deliveryCode: carrier === "PICAP" ? delivery_code : null,
+          evidenceCount: evidenceAttachments.length,
           adminCopy: true,
         });
+        const guideAtt = guideAttachment(publicUrl);
+        const attachments = [
+          ...(guideAtt ? [guideAtt] : []),
+          ...evidenceAttachments,
+        ];
         await sendMail({
           to: adminTo,
           subject: `Copia — ${subject}`,
           html,
           text,
-          ...(attachment ? { attachments: [attachment] } : {}),
+          ...(attachments.length ? { attachments } : {}),
         });
         console.log("[ship-email] Correo enviado al admin");
       }

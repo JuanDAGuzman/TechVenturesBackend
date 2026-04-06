@@ -213,6 +213,24 @@ async function autoMarkDone() {
 // Corre todos los días a las 3 AM hora Bogotá
 cron.schedule("0 3 * * *", autoMarkDone, { timezone: "America/Bogota" });
 
+// ── Limpieza de evidencias Picap (fotos temporales > 24h) ────────────────────
+async function cleanupPicapEvidence() {
+  try {
+    const result = await query(`
+      DELETE FROM picap_evidence
+      WHERE created_at < NOW() - INTERVAL '24 hours'
+    `);
+    if (result.rowCount > 0) {
+      console.log(`[evidence-cleanup] ${result.rowCount} foto(s) eliminadas`);
+    }
+  } catch (e) {
+    console.error("[evidence-cleanup] Error:", e.message);
+  }
+}
+
+// Limpiar evidencias cada hora
+cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" });
+
 (async () => {
   try {
     if (process.env.APPLY_SCHEMA_ON_BOOT === "1") {
