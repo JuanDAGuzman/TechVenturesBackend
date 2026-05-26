@@ -1076,6 +1076,26 @@ router.get("/search-customer", async (req, res) => {
   }
 });
 
+// Obtener datos completos del cliente más reciente por cédula (para autocompletar)
+router.get("/customer-latest/:id_number", async (req, res) => {
+  try {
+    const { id_number } = req.params;
+    const { rows } = await query(
+      `SELECT customer_name, customer_id_number, customer_email, customer_phone,
+              shipping_address, shipping_neighborhood, shipping_city, shipping_carrier
+       FROM appointments
+       WHERE customer_id_number = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [id_number.trim()]
+    );
+    return res.json({ ok: true, customer: rows[0] || null });
+  } catch (err) {
+    console.error("[customer-latest]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 // Listar todos los clientes en blacklist
 router.get("/blacklist", async (req, res) => {
   try {
