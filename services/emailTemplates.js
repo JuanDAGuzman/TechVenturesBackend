@@ -567,3 +567,83 @@ export function buildConfirmationEmail(appt) {
     return emailForInPerson(appt);
   }
 }
+
+export function buildRescheduledEmail(appt, { oldDate, oldStart, oldEnd } = {}) {
+  const typeLabel = typeLabelWithMinutes(appt.type_code, appt);
+  const newDateFmt = dayjs(appt.date).format("DD/MM/YYYY");
+  const oldDateFmt = oldDate ? dayjs(oldDate).format("DD/MM/YYYY") : "—";
+  const newTime = `${appt.start_time || "—"} – ${appt.end_time || "—"}`;
+  const oldTime = `${oldStart || "—"} – ${oldEnd || "—"}`;
+
+  const title = "Tu cita ha sido reagendada — TechVenturesCO";
+  const headerText = "Cita reagendada";
+
+  const rows = `
+    ${detailRow("Nuevo horario", `${newDateFmt} · ${newTime}`)}
+    ${detailRow("Horario anterior", `${oldDateFmt} · ${oldTime}`)}
+    ${detailRow("Tipo de cita", typeLabel)}
+    ${detailRow("Estado", "CONFIRMADA")}
+  `;
+
+  const content = `
+    <h2 style="margin: 0 0 10px 0; color: #111827; font-size: 24px; font-weight: 600;">
+      Hola ${escapeHtml(appt.customer_name || "")},
+    </h2>
+    <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 16px; line-height: 1.6;">
+      Hemos actualizado el horario de tu cita. Aquí están los detalles del cambio:
+    </p>
+    ${detailsTable(rows)}
+    ${infoBox(`Si el nuevo horario no te conviene o tienes alguna duda, responde a este correo y lo coordinamos.`)}
+  `;
+
+  const html = modernLayout({ title, headerText, content });
+
+  const text = `Tu cita ha sido reagendada.
+
+Nuevo horario: ${newDateFmt} · ${newTime}
+Horario anterior: ${oldDateFmt} · ${oldTime}
+Tipo: ${typeLabel}
+Estado: CONFIRMADA
+
+Si el nuevo horario no te conviene, responde a este correo.
+
+--
+TechVenturesCO
+© ${new Date().getFullYear()}`;
+
+  return {
+    subject: "Tu cita ha sido reagendada — TechVenturesCO",
+    html,
+    text,
+  };
+}
+
+export function buildUpdatedDetailsEmail(appt, { changes = [] } = {}) {
+  if (!changes.length) return null;
+
+  const title = "Actualización en tu cita — TechVenturesCO";
+  const headerText = "Datos de tu cita actualizados";
+
+  const changeRows = changes.map((c) => detailRow(c.label, c.value)).join("");
+
+  const content = `
+    <h2 style="margin: 0 0 10px 0; color: #111827; font-size: 24px; font-weight: 600;">
+      Hola ${escapeHtml(appt.customer_name || "")},
+    </h2>
+    <p style="margin: 0 0 20px 0; color: #6b7280; font-size: 16px; line-height: 1.6;">
+      Actualizamos los siguientes datos de tu cita:
+    </p>
+    ${detailsTable(changeRows)}
+    ${infoBox(`Si hay algún error en los datos o tienes alguna duda, responde a este correo.`)}
+  `;
+
+  const html = modernLayout({ title, headerText, content });
+
+  const text = `Datos de tu cita actualizados.\n\n${changes.map((c) => `${c.label}: ${c.value}`).join("\n")}\n\nSi hay algún error, responde a este correo.\n\n--\nTechVenturesCO\n© ${new Date().getFullYear()}`;
+
+  return {
+    subject: "Actualización en tu cita — TechVenturesCO",
+    html,
+    text,
+  };
+}

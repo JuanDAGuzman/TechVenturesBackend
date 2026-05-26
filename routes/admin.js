@@ -6,7 +6,7 @@ import fs from "fs";
 import os from "os";
 import { spawn } from "child_process";
 
-import { buildShippedEmail } from "../services/emailTemplates.js";
+import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail } from "../services/emailTemplates.js";
 import { sendMail } from "../services/mailer.js";
 
 const router = express.Router();
@@ -577,10 +577,61 @@ router.patch("/appointments/:id/ship", async (req, res) => {
   }
 });
 
+router.patch("/appointments/:id/reschedule", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date, start_time, end_time, notify = true } = req.body || {};
+
+    if (!date || !start_time || !end_time)
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+    const { rows: cur } = await query(
+      `SELECT id, type_code, customer_name, customer_email, slot_minutes,
+       to_char(date,'YYYY-MM-DD') AS date,
+       to_char(start_time,'HH24:MI') AS start_time,
+       to_char(end_time,'HH24:MI') AS end_time
+       FROM appointments WHERE id = $1`,
+      [id]
+    );
+    if (!cur.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    const appt = cur[0];
+
+    const oldDate = appt.date;
+    const oldStart = appt.start_time;
+    const oldEnd = appt.end_time;
+
+    const [sh, sm] = start_time.split(":").map(Number);
+    const [eh, em] = end_time.split(":").map(Number);
+    const slot_minutes = Math.max(0, eh * 60 + em - (sh * 60 + sm));
+
+    await query(
+      `UPDATE appointments SET date = $1, start_time = $2, end_time = $3, slot_minutes = $4 WHERE id = $5`,
+      [date, start_time, end_time, slot_minutes, id]
+    );
+
+    if (notify && appt.customer_email) {
+      try {
+        const updated = { ...appt, date, start_time, end_time, slot_minutes };
+        const { subject, html, text } = buildRescheduledEmail(updated, { oldDate, oldStart, oldEnd });
+        await sendMail({ to: appt.customer_email, subject, html, text });
+        console.log("[reschedule-email] Correo enviado a", appt.customer_email);
+      } catch (e) {
+        console.error("[reschedule-email]", e);
+      }
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[reschedule]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 router.patch("/appointments/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const {
+      notify = false,
       customer_name,
       customer_id_number,
       customer_email,
@@ -596,6 +647,13 @@ router.patch("/appointments/:id", async (req, res) => {
       shipping_cost,
       shipping_trip_link,
     } = req.body || {};
+
+    // Fetch current record before update if notification requested
+    let before = null;
+    if (notify) {
+      const { rows: cur } = await query(`SELECT * FROM appointments WHERE id = $1`, [id]);
+      if (cur.length) before = cur[0];
+    }
 
     const { rows } = await query(
       `
@@ -681,6 +739,36 @@ router.patch("/appointments/:id", async (req, res) => {
         } catch (blErr) {
           console.error("[AUTO-BLACKLIST] Error al bloquear cliente:", blErr);
           // No bloqueamos la respuesta si falla el blacklist
+        }
+      }
+    }
+
+    // Enviar notificación de cambios al cliente si se solicitó
+    if (notify && before) {
+      const TRACKED = [
+        { field: "customer_name", label: "Nombre" },
+        { field: "customer_email", label: "Correo electrónico" },
+        { field: "customer_phone", label: "Celular" },
+        { field: "product", label: "Producto" },
+        { field: "shipping_address", label: "Dirección de envío" },
+        { field: "shipping_neighborhood", label: "Barrio" },
+        { field: "shipping_city", label: "Ciudad" },
+      ];
+      const changes = TRACKED.filter(
+        (t) => req.body[t.field] != null && String(before[t.field] || "") !== String(req.body[t.field] || "")
+      ).map((t) => ({ label: t.label, value: req.body[t.field] }));
+
+      const emailTarget = customer_email || before.customer_email;
+      if (changes.length && emailTarget) {
+        try {
+          const apptForEmail = { ...before, customer_name: customer_name || before.customer_name };
+          const result = buildUpdatedDetailsEmail(apptForEmail, { changes });
+          if (result) {
+            await sendMail({ to: emailTarget, subject: result.subject, html: result.html, text: result.text });
+            console.log("[update-email] Correo de cambios enviado a", emailTarget);
+          }
+        } catch (e) {
+          console.error("[update-email]", e);
         }
       }
     }
