@@ -6,7 +6,7 @@ import fs from "fs";
 import os from "os";
 import { spawn } from "child_process";
 
-import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail } from "../services/emailTemplates.js";
+import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail, buildConfirmationEmail } from "../services/emailTemplates.js";
 import { sendMail } from "../services/mailer.js";
 
 const router = express.Router();
@@ -308,6 +308,69 @@ router.get("/windows", async (req, res) => {
     return res.json({ ok: true, rows: rows.rows });
   } catch (e) {
     console.error("[admin/windows GET]", e);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.post("/appointments", async (req, res) => {
+  try {
+    const {
+      type_code, date, start_time, end_time,
+      customer_name, customer_email, customer_phone, customer_id_number,
+      product, notes,
+      shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
+      send_email = true,
+    } = req.body || {};
+
+    if (!type_code || !customer_name || !customer_email || !product)
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
+    const delivery_method = type_code === "SHIPPING" ? "SHIPPING" : "IN_PERSON";
+
+    let slot_minutes = null;
+    if (start_time && end_time) {
+      const [sh, sm] = start_time.split(":").map(Number);
+      const [eh, em] = end_time.split(":").map(Number);
+      slot_minutes = Math.max(0, eh * 60 + em - (sh * 60 + sm));
+    }
+
+    const { rows } = await query(
+      `INSERT INTO appointments
+        (type_code, date, start_time, end_time, slot_minutes,
+         customer_name, customer_email, customer_phone, customer_id_number,
+         product, notes, delivery_method, status,
+         shipping_address, shipping_neighborhood, shipping_city, shipping_carrier)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'CONFIRMED',$13,$14,$15,$16)
+       RETURNING id`,
+      [
+        type_code, date || null, start_time || null, end_time || null, slot_minutes,
+        customer_name, customer_email, customer_phone || null, customer_id_number || null,
+        product, notes || null, delivery_method,
+        shipping_address || null, shipping_neighborhood || null, shipping_city || null, shipping_carrier || null,
+      ]
+    );
+
+    const id = rows[0].id;
+
+    if (send_email) {
+      try {
+        const apptForEmail = {
+          id, type_code, date, start_time, end_time, slot_minutes,
+          customer_name, customer_email, customer_phone, product, notes,
+          delivery_method, status: "CONFIRMED",
+          shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
+        };
+        const { subject, html, text } = buildConfirmationEmail(apptForEmail);
+        await sendMail({ to: customer_email, subject, html, text });
+        console.log("[admin-book] Correo de confirmación enviado a", customer_email);
+      } catch (e) {
+        console.error("[admin-book-email]", e);
+      }
+    }
+
+    return res.json({ ok: true, id });
+  } catch (err) {
+    console.error("[admin/appointments POST]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
