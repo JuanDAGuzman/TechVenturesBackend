@@ -12,6 +12,7 @@ import cron from "node-cron";
 
 import publicRoutes from "./routes/public.js";
 import adminRoutes from "./routes/admin.js";
+import catalogRoutes from "./routes/catalog.js";
 import diagnostics from "./routes/diagnostics.js";
 import { verifySMTP } from "./services/mailer.js";
 import { query } from "./db.js";
@@ -134,6 +135,7 @@ function requireAdmin(req, res, next) {
 }
 
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
+app.use("/api/catalog", catalogRoutes);
 
 const apiRouter = express.Router();
 apiRouter.use(express.json());

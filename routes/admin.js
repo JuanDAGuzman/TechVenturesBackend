@@ -1158,4 +1158,169 @@ router.delete("/blacklist/:id_number", async (req, res) => {
   }
 });
 
+// ── CATÁLOGO DE PRODUCTOS ─────────────────────────────────────────────────────
+
+const PRODUCTS_DIR = path.join(__dirname, "..", "uploads", "products");
+fs.mkdirSync(PRODUCTS_DIR, { recursive: true });
+
+// Listar todos los productos (admin ve disponibles e indisponibles)
+router.get("/products", async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT * FROM products ORDER BY price ASC, name ASC`
+    );
+    return res.json({ ok: true, products: rows });
+  } catch (err) {
+    console.error("[admin/products GET]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Crear producto
+router.post("/products", async (req, res) => {
+  try {
+    const { name, category, memory_capacity, price, condition, description, available } = req.body;
+    if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    }
+    const { rows } = await query(
+      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        name.trim(),
+        category.trim(),
+        memory_capacity?.trim() || null,
+        Number(price),
+        condition?.trim() || "",
+        description?.trim() || null,
+        available !== false,
+      ]
+    );
+    return res.status(201).json({ ok: true, product: rows[0] });
+  } catch (err) {
+    console.error("[admin/products POST]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Actualizar producto
+router.patch("/products/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, category, memory_capacity, price, condition, description, available } = req.body;
+    const { rows } = await query(
+      `UPDATE products SET
+        name            = $1,
+        category        = $2,
+        memory_capacity = $3,
+        price           = $4,
+        condition       = $5,
+        description     = $6,
+        available       = $7,
+        updated_at      = NOW()
+       WHERE id = $8
+       RETURNING *`,
+      [
+        name?.trim() ?? "",
+        category?.trim() ?? "",
+        memory_capacity?.trim() || null,
+        Number(price ?? 0),
+        condition?.trim() ?? "",
+        description?.trim() || null,
+        available !== false,
+        id,
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    return res.json({ ok: true, product: rows[0] });
+  } catch (err) {
+    console.error("[admin/products PATCH]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Eliminar producto
+router.delete("/products/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows } = await query(`DELETE FROM products WHERE id = $1 RETURNING image_url`, [id]);
+    if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    if (rows[0].image_url) {
+      const filename = rows[0].image_url.split("/").pop();
+      const filePath = path.join(PRODUCTS_DIR, filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[admin/products DELETE]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Subir / reemplazar imagen del producto (base64 en JSON)
+router.post("/products/:id/image", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { image, ext = "jpg" } = req.body;
+    if (!image) return res.status(400).json({ ok: false, error: "MISSING_IMAGE" });
+
+    const safeExt = ["jpg", "jpeg", "png", "webp"].includes(ext.toLowerCase())
+      ? ext.toLowerCase()
+      : "jpg";
+    const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${safeExt}`;
+    const filePath = path.join(PRODUCTS_DIR, filename);
+
+    // Borrar imagen anterior si existe
+    const { rows: oldRows } = await query(`SELECT image_url FROM products WHERE id = $1`, [id]);
+    if (oldRows[0]?.image_url) {
+      const oldFilename = oldRows[0].image_url.split("/").pop();
+      const oldPath = path.join(PRODUCTS_DIR, oldFilename);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    fs.writeFileSync(filePath, Buffer.from(image, "base64"));
+    const publicUrl = `/uploads/products/${filename}`;
+    await query(`UPDATE products SET image_url = $1, updated_at = NOW() WHERE id = $2`, [publicUrl, id]);
+
+    return res.json({ ok: true, image_url: publicUrl });
+  } catch (err) {
+    console.error("[admin/products image]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Leer configuración de la tienda
+router.get("/store-settings", async (req, res) => {
+  try {
+    const { rows } = await query(`SELECT key, value FROM store_settings`);
+    const settings = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    return res.json({ ok: true, settings });
+  } catch (err) {
+    console.error("[admin/store-settings GET]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Guardar configuración de la tienda
+router.patch("/store-settings", async (req, res) => {
+  try {
+    const { settings } = req.body;
+    if (!settings || typeof settings !== "object") {
+      return res.status(400).json({ ok: false, error: "INVALID_BODY" });
+    }
+    for (const [key, value] of Object.entries(settings)) {
+      await query(
+        `INSERT INTO store_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [key, String(value)]
+      );
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[admin/store-settings PATCH]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 export default router;

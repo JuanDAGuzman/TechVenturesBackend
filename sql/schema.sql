@@ -233,3 +233,54 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql;
+
+-- ============================================================================
+-- Catálogo de productos
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS products (
+  id              UUID    PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name            TEXT    NOT NULL,
+  category        TEXT    NOT NULL,
+  memory_capacity TEXT,
+  price           INTEGER NOT NULL DEFAULT 0,
+  condition       TEXT    NOT NULL DEFAULT '',
+  image_url       TEXT,
+  available       BOOLEAN NOT NULL DEFAULT true,
+  description     TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
+CREATE INDEX IF NOT EXISTS idx_products_available ON products(available);
+CREATE INDEX IF NOT EXISTS idx_products_price     ON products(price);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'tr_products_updated_at'
+  ) THEN
+    CREATE TRIGGER tr_products_updated_at
+    BEFORE UPDATE ON products
+    FOR EACH ROW
+    EXECUTE PROCEDURE set_updated_at();
+  END IF;
+END$$;
+
+-- ============================================================================
+-- Configuración de la tienda (editable desde el admin)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS store_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO store_settings (key, value) VALUES
+  ('whatsapp_number', '573108216274'),
+  ('trade_in_note',   'Acepto GPUs como parte de pago (permuta)'),
+  ('payment_methods', 'Efectivo o transferencia sin recargo · Tarjeta (datáfono) con 6% de recargo'),
+  ('prices_note',     'Los precios son fijos')
+ON CONFLICT (key) DO NOTHING;
