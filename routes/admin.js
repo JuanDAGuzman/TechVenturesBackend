@@ -1323,4 +1323,85 @@ router.patch("/store-settings", async (req, res) => {
   }
 });
 
+// ── BÚSQUEDA DE IMÁGENES (Google Custom Search) ───────────────────────────────
+
+router.get("/image-search", async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q?.trim()) return res.status(400).json({ ok: false, error: "MISSING_QUERY" });
+
+    const key = process.env.GOOGLE_CSE_KEY;
+    const cx  = process.env.GOOGLE_CSE_ID;
+    if (!key || !cx) return res.status(500).json({ ok: false, error: "CSE_NOT_CONFIGURED" });
+
+    const params = new URLSearchParams({
+      key, cx,
+      q: `${q.trim()} graphics card`,
+      searchType: "image",
+      num: "8",
+      imgType: "photo",
+      safe: "medium",
+    });
+
+    const r    = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
+    const data = await r.json();
+
+    if (!r.ok) {
+      console.error("[image-search] Google error:", data);
+      return res.status(502).json({ ok: false, error: "CSE_ERROR" });
+    }
+
+    const images = (data.items || []).map((item) => ({
+      url:   item.link,
+      thumb: item.image?.thumbnailLink,
+      title: item.title,
+    }));
+
+    return res.json({ ok: true, images });
+  } catch (err) {
+    console.error("[image-search]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Descargar imagen desde URL externa y guardarla en el servidor
+router.post("/products/:id/image-url", async (req, res) => {
+  try {
+    const { id }  = req.params;
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ ok: false, error: "MISSING_URL" });
+
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; TechVenturesCO/1.0)" },
+      redirect: "follow",
+    });
+    if (!r.ok) return res.status(502).json({ ok: false, error: "FETCH_FAILED" });
+
+    const contentType = r.headers.get("content-type") || "image/jpeg";
+    const extMap = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+    const ext    = extMap[contentType.split(";")[0].trim()] ?? "jpg";
+
+    const buffer   = Buffer.from(await r.arrayBuffer());
+    const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+    const filePath = path.join(PRODUCTS_DIR, filename);
+
+    // Borrar imagen anterior si existe
+    const { rows: oldRows } = await query(`SELECT image_url FROM products WHERE id = $1`, [id]);
+    if (oldRows[0]?.image_url?.startsWith("/uploads/")) {
+      const oldFilename = oldRows[0].image_url.split("/").pop();
+      const oldPath = path.join(PRODUCTS_DIR, oldFilename);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+
+    fs.writeFileSync(filePath, buffer);
+    const publicUrl = `/uploads/products/${filename}`;
+    await query(`UPDATE products SET image_url = $1, updated_at = NOW() WHERE id = $2`, [publicUrl, id]);
+
+    return res.json({ ok: true, image_url: publicUrl });
+  } catch (err) {
+    console.error("[image-url]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 export default router;
