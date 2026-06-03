@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS store_settings (
 
 INSERT INTO store_settings (key, value) VALUES
   ('whatsapp_number', '573108216274'),
-  ('trade_in_note',   'Acepto GPUs como parte de pago (permuta)'),
-  ('payment_methods', 'Efectivo o transferencia sin recargo · Tarjeta (datáfono) con 6% de recargo'),
-  ('prices_note',     'Los precios son fijos')
+  ('trade_in_note',   '¡Aceptamos gráficas como parte de pago!'),
+  ('payment_methods', 'Tarjetas crédito y débito disponibles (datáfono). Recargo del 6% con datáfono. Efectivo o transferencia sin recargo.'),
+  ('prices_note',     'Precios claros y sin negociación. ¿Compras varias unidades? Escríbenos, podemos revisar opciones.')
 ON CONFLICT (key) DO NOTHING;
