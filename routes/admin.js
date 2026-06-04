@@ -1335,7 +1335,7 @@ router.get("/image-search", async (req, res) => {
       engine: "google_images",
       api_key: key,
       q: q.trim(),
-      num: "8",
+      num: "16",
       safe: "active",
     });
 
