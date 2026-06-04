@@ -1179,13 +1179,13 @@ router.get("/products", async (req, res) => {
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, condition, description, available } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         name.trim(),
@@ -1195,6 +1195,7 @@ router.post("/products", async (req, res) => {
         condition?.trim() || "",
         description?.trim() || null,
         available !== false,
+        image_url || null,
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1208,29 +1209,26 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, condition, description, available } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url } = req.body;
+
+    // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
+    const hasImage = image_url !== undefined;
+
     const { rows } = await query(
-      `UPDATE products SET
-        name            = $1,
-        category        = $2,
-        memory_capacity = $3,
-        price           = $4,
-        condition       = $5,
-        description     = $6,
-        available       = $7,
-        updated_at      = NOW()
-       WHERE id = $8
-       RETURNING *`,
-      [
-        name?.trim() ?? "",
-        category?.trim() ?? "",
-        memory_capacity?.trim() || null,
-        Number(price ?? 0),
-        condition?.trim() ?? "",
-        description?.trim() || null,
-        available !== false,
-        id,
-      ]
+      hasImage
+        ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
+                condition=$5, description=$6, available=$7, image_url=$8, updated_at=NOW()
+           WHERE id=$9 RETURNING *`
+        : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
+                condition=$5, description=$6, available=$7, updated_at=NOW()
+           WHERE id=$8 RETURNING *`,
+      hasImage
+        ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
+           Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
+           available !== false, image_url || null, id]
+        : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
+           Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
+           available !== false, id]
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true, product: rows[0] });
