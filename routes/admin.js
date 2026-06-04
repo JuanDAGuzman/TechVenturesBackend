@@ -1330,30 +1330,28 @@ router.get("/image-search", async (req, res) => {
     const { q } = req.query;
     if (!q?.trim()) return res.status(400).json({ ok: false, error: "MISSING_QUERY" });
 
-    const key = process.env.GOOGLE_CSE_KEY;
-    const cx  = process.env.GOOGLE_CSE_ID;
-    if (!key || !cx) return res.status(500).json({ ok: false, error: "CSE_NOT_CONFIGURED" });
+    const key = process.env.SERPAPI_KEY;
+    if (!key) return res.status(500).json({ ok: false, error: "SERPAPI_NOT_CONFIGURED" });
 
     const params = new URLSearchParams({
-      key, cx,
-      q: `${q.trim()} graphics card`,
-      searchType: "image",
+      engine: "google_images",
+      api_key: key,
+      q: q.trim(),
       num: "8",
-      imgType: "photo",
-      safe: "medium",
+      safe: "active",
     });
 
-    const r    = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
+    const r    = await fetch(`https://serpapi.com/search.json?${params}`);
     const data = await r.json();
 
-    if (!r.ok) {
-      console.error("[image-search] Google error:", data);
-      return res.status(502).json({ ok: false, error: "CSE_ERROR" });
+    if (!r.ok || data.error) {
+      console.error("[image-search] SerpAPI error:", data.error ?? data);
+      return res.status(502).json({ ok: false, error: "SEARCH_ERROR" });
     }
 
-    const images = (data.items || []).map((item) => ({
-      url:   item.link,
-      thumb: item.image?.thumbnailLink,
+    const images = (data.images_results || []).slice(0, 8).map((item) => ({
+      url:   item.original,
+      thumb: item.thumbnail,
       title: item.title,
     }));
 
