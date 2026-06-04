@@ -1347,7 +1347,7 @@ router.get("/image-search", async (req, res) => {
       return res.status(502).json({ ok: false, error: "SEARCH_ERROR" });
     }
 
-    const images = (data.images_results || []).slice(0, 8).map((item) => ({
+    const images = (data.images_results || []).slice(0, 16).map((item) => ({
       url:   item.original,
       thumb: item.thumbnail,
       title: item.title,
