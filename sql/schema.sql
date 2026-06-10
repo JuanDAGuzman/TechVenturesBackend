@@ -248,6 +248,8 @@ CREATE TABLE IF NOT EXISTS products (
   image_url       TEXT,
   available       BOOLEAN NOT NULL DEFAULT true,
   description     TEXT,
+  tier            TEXT    CHECK (tier IS NULL OR tier IN ('Baja', 'Media', 'Alta')),
+  is_flagship     BOOLEAN NOT NULL DEFAULT false,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

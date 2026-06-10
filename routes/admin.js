@@ -1176,16 +1176,19 @@ router.get("/products", async (req, res) => {
   }
 });
 
+const VALID_TIERS = ["Baja", "Media", "Alta"];
+
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, condition, description, available, image_url } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
+    const tierValue = VALID_TIERS.includes(tier) ? tier : null;
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         name.trim(),
@@ -1196,6 +1199,8 @@ router.post("/products", async (req, res) => {
         description?.trim() || null,
         available !== false,
         image_url || null,
+        tierValue,
+        is_flagship === true,
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1209,26 +1214,28 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, condition, description, available, image_url } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship } = req.body;
 
     // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
     const hasImage = image_url !== undefined;
+    const tierValue = VALID_TIERS.includes(tier) ? tier : null;
+    const flagshipValue = is_flagship === true;
 
     const { rows } = await query(
       hasImage
         ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, image_url=$8, updated_at=NOW()
-           WHERE id=$9 RETURNING *`
+                condition=$5, description=$6, available=$7, image_url=$8, tier=$9, is_flagship=$10, updated_at=NOW()
+           WHERE id=$11 RETURNING *`
         : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, updated_at=NOW()
-           WHERE id=$8 RETURNING *`,
+                condition=$5, description=$6, available=$7, tier=$8, is_flagship=$9, updated_at=NOW()
+           WHERE id=$10 RETURNING *`,
       hasImage
         ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
-           available !== false, image_url || null, id]
+           available !== false, image_url || null, tierValue, flagshipValue, id]
         : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
-           available !== false, id]
+           available !== false, tierValue, flagshipValue, id]
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true, product: rows[0] });
