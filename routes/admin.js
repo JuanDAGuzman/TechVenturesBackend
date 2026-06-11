@@ -1263,6 +1263,83 @@ router.delete("/products/:id", async (req, res) => {
   }
 });
 
+// ── Categorías / secciones del catálogo ────────────────────────────────────
+
+router.get("/categories", async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, name, color, sort_order FROM categories ORDER BY sort_order ASC, name ASC`
+    );
+    return res.json({ ok: true, categories: rows });
+  } catch (err) {
+    console.error("[admin/categories GET]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Crear categoría/sección
+router.post("/categories", async (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name?.trim()) return res.status(400).json({ ok: false, error: "MISSING_NAME" });
+
+    const { rows: maxRows } = await query(`SELECT COALESCE(MAX(sort_order), -1) AS max FROM categories`);
+    const sortOrder = Number(maxRows[0].max) + 1;
+
+    const { rows } = await query(
+      `INSERT INTO categories (name, color, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+      [name.trim(), color || "#64748b", sortOrder]
+    );
+    return res.status(201).json({ ok: true, category: rows[0] });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ ok: false, error: "DUPLICATE_NAME" });
+    console.error("[admin/categories POST]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Actualizar color de una categoría
+router.patch("/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { color } = req.body;
+    if (!color?.trim()) return res.status(400).json({ ok: false, error: "MISSING_COLOR" });
+
+    const { rows } = await query(
+      `UPDATE categories SET color = $1 WHERE id = $2 RETURNING *`,
+      [color.trim(), id]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    return res.json({ ok: true, category: rows[0] });
+  } catch (err) {
+    console.error("[admin/categories PATCH]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Eliminar categoría/sección (solo si ningún producto la usa)
+router.delete("/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rows: catRows } = await query(`SELECT name FROM categories WHERE id = $1`, [id]);
+    if (!catRows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+
+    const { rows: countRows } = await query(
+      `SELECT COUNT(*)::int AS count FROM products WHERE category = $1`,
+      [catRows[0].name]
+    );
+    if (countRows[0].count > 0) {
+      return res.status(409).json({ ok: false, error: "CATEGORY_IN_USE", count: countRows[0].count });
+    }
+
+    await query(`DELETE FROM categories WHERE id = $1`, [id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[admin/categories DELETE]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 // Subir / reemplazar imagen del producto (base64 en JSON)
 router.post("/products/:id/image", async (req, res) => {
   try {

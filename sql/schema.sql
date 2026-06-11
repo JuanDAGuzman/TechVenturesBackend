@@ -235,6 +235,26 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ============================================================================
+-- Categorías / secciones del catálogo
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS categories (
+  id         SERIAL PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  color      TEXT NOT NULL DEFAULT '#64748b',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO categories (name, color, sort_order) VALUES
+  ('NVIDIA',      '#76B900', 0),
+  ('AMD',         '#ED1C24', 1),
+  ('Intel',       '#0068B5', 2),
+  ('Componentes', '#64748b', 3),
+  ('Celulares',   '#8B5CF6', 4)
+ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================================
 -- Catálogo de productos
 -- ============================================================================
 

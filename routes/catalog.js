@@ -43,6 +43,19 @@ router.get("/products", async (req, res) => {
   }
 });
 
+// Listar categorías/secciones del catálogo (público)
+router.get("/categories", async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, name, color FROM categories ORDER BY sort_order ASC, name ASC`
+    );
+    return res.json({ ok: true, categories: rows });
+  } catch (err) {
+    console.error("[catalog/categories]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 // Configuración pública de la tienda
 router.get("/settings", async (req, res) => {
   try {
