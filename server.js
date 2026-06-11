@@ -4,9 +4,9 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import rateLimit from "express-rate-limit";
 import http from "http";
-
+import crypto from "crypto";
 
 import cron from "node-cron";
 
@@ -22,7 +22,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-app.use(express.json({ limit: "50mb" }));
+// El admin sube imágenes de productos/evidencias como base64 en JSON
+app.use(express.json({ limit: "15mb" }));
 app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -101,7 +102,6 @@ const createApptIpLimiter = rateLimit({
     error: "RATE_LIMIT",
     meta: { scope: "IP", retry: "5m", max: 2 },
   },
-  keyGenerator: ipKeyGenerator,
 });
 
 const createApptLimiter = rateLimit({
@@ -125,10 +125,25 @@ const adminBruteforceLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
+// Limita las búsquedas de cliente por número de identificación: este endpoint
+// devuelve datos personales (dirección, teléfono, email), así que se restringe
+// agresivamente para impedir el "barrido" de cédulas
+const customerLookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", meta: { retry: "15m", max: 10 } },
+});
+
 function requireAdmin(req, res, next) {
-  const token = (req.headers["x-admin-token"] || "").trim();
-  const expected = (process.env.ADMIN_TOKEN || "").trim();
-  if (!token || token !== expected) {
+  const token = Buffer.from((req.headers["x-admin-token"] || "").trim());
+  const expected = Buffer.from((process.env.ADMIN_TOKEN || "").trim());
+  if (
+    token.length === 0 ||
+    token.length !== expected.length ||
+    !crypto.timingSafeEqual(token, expected)
+  ) {
     return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
   }
   next();
@@ -136,15 +151,15 @@ function requireAdmin(req, res, next) {
 
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 app.use("/api/catalog", catalogRoutes);
+app.use("/diag", requireAdmin, diagnostics);
 
 const apiRouter = express.Router();
 apiRouter.use(express.json());
 apiRouter.post("/appointments", createApptIpLimiter, createApptLimiter);
+apiRouter.get("/customer-by-id", customerLookupLimiter);
 apiRouter.use(publicRoutes);
 
 app.use("/api", apiRouter);
-
-app.use("/diag", diagnostics);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -153,10 +168,11 @@ app.use((req, res) => res.status(404).json({ ok: false, error: "NOT_FOUND" }));
 
 app.use((err, _req, res, _next) => {
   const msg = err?.message || "INTERNAL_ERROR";
-  if (msg !== "CORS_NOT_ALLOWED") console.error("[ERR]", msg);
-  res
-    .status(msg === "CORS_NOT_ALLOWED" ? 403 : 500)
-    .json({ ok: false, error: msg });
+  if (msg === "CORS_NOT_ALLOWED") {
+    return res.status(403).json({ ok: false, error: msg });
+  }
+  console.error("[ERR]", msg);
+  res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
 });
 
 async function applySchemaIdempotent() {
