@@ -306,3 +306,18 @@ INSERT INTO store_settings (key, value) VALUES
   ('payment_methods', 'Tarjetas crédito y débito disponibles (datáfono). Recargo del 6% con datáfono. Efectivo o transferencia sin recargo.'),
   ('prices_note',     'Precios claros y sin negociación. ¿Compras varias unidades? Escríbenos, podemos revisar opciones.')
 ON CONFLICT (key) DO NOTHING;
+
+-- ============================================================================
+-- Passkeys (WebAuthn) para login del admin con Windows Hello / huella / Face ID
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS admin_passkeys (
+  id            SERIAL PRIMARY KEY,
+  credential_id TEXT NOT NULL UNIQUE,
+  public_key    TEXT NOT NULL,
+  counter       BIGINT NOT NULL DEFAULT 0,
+  device_name   TEXT,
+  transports    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_used_at  TIMESTAMPTZ
+);

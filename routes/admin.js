@@ -4,10 +4,17 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
+import crypto from "crypto";
 import { spawn } from "child_process";
+import {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+} from "@simplewebauthn/server";
 
 import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail, buildConfirmationEmail } from "../services/emailTemplates.js";
 import { sendMail } from "../services/mailer.js";
+import { rpID, rpName, expectedOrigins } from "../lib/webauthnConfig.js";
+import { setChallenge, takeChallenge } from "../lib/webauthnChallenges.js";
 
 const router = express.Router();
 
@@ -1482,6 +1489,87 @@ router.post("/products/:id/image-url", async (req, res) => {
     console.error("[image-url]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
+});
+
+// ── Passkeys (WebAuthn) para login del admin con Windows Hello / huella ────
+const ADMIN_USER_ID = crypto.createHash("sha256").update("techventuresco-admin").digest();
+
+router.get("/webauthn/credentials", async (req, res) => {
+  const { rows } = await query(
+    "SELECT id, device_name, created_at, last_used_at FROM admin_passkeys ORDER BY created_at DESC"
+  );
+  res.json({ ok: true, credentials: rows });
+});
+
+router.post("/webauthn/register-options", async (req, res) => {
+  const { rows } = await query("SELECT credential_id, transports FROM admin_passkeys");
+  const excludeCredentials = rows.map((r) => ({
+    id: r.credential_id,
+    transports: r.transports ? r.transports.split(",") : undefined,
+  }));
+
+  const options = await generateRegistrationOptions({
+    rpName,
+    rpID,
+    userName: "admin",
+    userID: ADMIN_USER_ID,
+    attestationType: "none",
+    excludeCredentials,
+    authenticatorSelection: {
+      residentKey: "required",
+      userVerification: "required",
+    },
+  });
+
+  setChallenge("register", options.challenge);
+  res.json({ ok: true, options });
+});
+
+router.post("/webauthn/register-verify", async (req, res) => {
+  const { response, deviceName } = req.body || {};
+  const expectedChallenge = takeChallenge("register");
+  if (!expectedChallenge || !response?.id) {
+    return res.status(400).json({ ok: false, error: "INVALID_REQUEST" });
+  }
+
+  let verification;
+  try {
+    verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge,
+      expectedOrigin: expectedOrigins,
+      expectedRPID: rpID,
+    });
+  } catch (e) {
+    console.error("[webauthn/register-verify]", e.message);
+    return res.status(400).json({ ok: false, error: "VERIFICATION_FAILED" });
+  }
+
+  if (!verification.verified || !verification.registrationInfo) {
+    return res.status(400).json({ ok: false, error: "VERIFICATION_FAILED" });
+  }
+
+  const { credential } = verification.registrationInfo;
+
+  await query(
+    `INSERT INTO admin_passkeys (credential_id, public_key, counter, device_name, transports)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (credential_id) DO NOTHING`,
+    [
+      credential.id,
+      Buffer.from(credential.publicKey).toString("base64"),
+      credential.counter,
+      (deviceName || "").slice(0, 100) || "Dispositivo",
+      credential.transports ? credential.transports.join(",") : null,
+    ]
+  );
+
+  res.json({ ok: true });
+});
+
+router.delete("/webauthn/credentials/:id", async (req, res) => {
+  await query("DELETE FROM admin_passkeys WHERE id = $1", [req.params.id]);
+  res.json({ ok: true });
 });
 
 export default router;

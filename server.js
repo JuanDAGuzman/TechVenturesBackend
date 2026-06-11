@@ -14,6 +14,7 @@ import publicRoutes from "./routes/public.js";
 import adminRoutes from "./routes/admin.js";
 import catalogRoutes from "./routes/catalog.js";
 import diagnostics from "./routes/diagnostics.js";
+import webauthnRoutes from "./routes/webauthn.js";
 import { verifySMTP } from "./services/mailer.js";
 import { query } from "./db.js";
 
@@ -136,6 +137,15 @@ const customerLookupLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", meta: { retry: "15m", max: 10 } },
 });
 
+// Limita el login con passkey (Windows Hello / huella) del admin
+const webauthnLoginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", meta: { retry: "10m", max: 20 } },
+});
+
 function requireAdmin(req, res, next) {
   const token = Buffer.from((req.headers["x-admin-token"] || "").trim());
   const expected = Buffer.from((process.env.ADMIN_TOKEN || "").trim());
@@ -151,6 +161,7 @@ function requireAdmin(req, res, next) {
 
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 app.use("/api/catalog", catalogRoutes);
+app.use("/api/webauthn", webauthnLoginLimiter, webauthnRoutes);
 app.use("/diag", requireAdmin, diagnostics);
 
 const apiRouter = express.Router();
