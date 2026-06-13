@@ -30,7 +30,7 @@ router.get("/products", async (req, res) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const { rows } = await query(
-      `SELECT id, name, category, memory_capacity, price, condition, image_url, available, description, tier, is_flagship
+      `SELECT id, name, category, memory_capacity, price, condition, image_url, available, description, tier, is_flagship, whatsapp_number
        FROM products ${where}
        ORDER BY price ASC, name ASC`,
       params

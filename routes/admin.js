@@ -6,6 +6,7 @@ import fs from "fs";
 import os from "os";
 import crypto from "crypto";
 import { spawn } from "child_process";
+import PDFDocument from "pdfkit";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -15,6 +16,7 @@ import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail, bui
 import { sendMail } from "../services/mailer.js";
 import { rpID, rpName, expectedOrigins } from "../lib/webauthnConfig.js";
 import { setChallenge, takeChallenge } from "../lib/webauthnChallenges.js";
+import { buildCatalogPdf } from "../lib/catalogPdf.js";
 
 const router = express.Router();
 
@@ -1185,17 +1187,25 @@ router.get("/products", async (req, res) => {
 
 const VALID_TIERS = ["Baja", "Media", "Alta"];
 
+// Normaliza un número de WhatsApp a formato "57XXXXXXXXXX" (10 dígitos locales + indicativo)
+function normalizeWhatsappNumber(raw) {
+  const digits = (raw || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return `57${digits}`;
+  return digits;
+}
+
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         name.trim(),
@@ -1208,6 +1218,7 @@ router.post("/products", async (req, res) => {
         image_url || null,
         tierValue,
         is_flagship === true,
+        normalizeWhatsappNumber(whatsapp_number),
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1221,28 +1232,29 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship } = req.body;
+    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
 
     // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
     const hasImage = image_url !== undefined;
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
     const flagshipValue = is_flagship === true;
+    const whatsappValue = normalizeWhatsappNumber(whatsapp_number);
 
     const { rows } = await query(
       hasImage
         ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, image_url=$8, tier=$9, is_flagship=$10, updated_at=NOW()
-           WHERE id=$11 RETURNING *`
+                condition=$5, description=$6, available=$7, image_url=$8, tier=$9, is_flagship=$10, whatsapp_number=$11, updated_at=NOW()
+           WHERE id=$12 RETURNING *`
         : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, tier=$8, is_flagship=$9, updated_at=NOW()
-           WHERE id=$10 RETURNING *`,
+                condition=$5, description=$6, available=$7, tier=$8, is_flagship=$9, whatsapp_number=$10, updated_at=NOW()
+           WHERE id=$11 RETURNING *`,
       hasImage
         ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
-           available !== false, image_url || null, tierValue, flagshipValue, id]
+           available !== false, image_url || null, tierValue, flagshipValue, whatsappValue, id]
         : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
-           available !== false, tierValue, flagshipValue, id]
+           available !== false, tierValue, flagshipValue, whatsappValue, id]
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true, product: rows[0] });
@@ -1267,6 +1279,39 @@ router.delete("/products/:id", async (req, res) => {
   } catch (err) {
     console.error("[admin/products DELETE]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Genera un catálogo en PDF con los productos disponibles, agrupados por categoría
+router.get("/catalog-pdf", async (req, res) => {
+  try {
+    const [{ rows: products }, { rows: categories }, { rows: settingsRows }] = await Promise.all([
+      query(
+        `SELECT id, name, category, memory_capacity, price, condition, image_url, description, tier
+           FROM products WHERE available = true
+           ORDER BY category ASC, price ASC, name ASC`
+      ),
+      query(`SELECT name, color FROM categories ORDER BY sort_order ASC, name ASC`),
+      query(`SELECT key, value FROM store_settings`),
+    ]);
+    const settings = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="catalogo-techventuresco-${new Date().toISOString().slice(0, 10)}.pdf"`
+    );
+
+    const doc = new PDFDocument({ size: "A4", margin: 40 });
+    doc.pipe(res);
+
+    await buildCatalogPdf(doc, { products, categories, settings, uploadsRoot: PRODUCTS_DIR });
+
+    doc.end();
+  } catch (err) {
+    console.error("[admin/catalog-pdf]", err);
+    if (!res.headersSent) return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    res.end();
   }
 });
 

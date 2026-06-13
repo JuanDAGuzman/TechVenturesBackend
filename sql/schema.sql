@@ -270,9 +270,13 @@ CREATE TABLE IF NOT EXISTS products (
   description     TEXT,
   tier            TEXT    CHECK (tier IS NULL OR tier IN ('Baja', 'Media', 'Alta')),
   is_flagship     BOOLEAN NOT NULL DEFAULT false,
+  whatsapp_number TEXT,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Número de WhatsApp alternativo por producto (si es NULL, usa el general)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_available ON products(available);
