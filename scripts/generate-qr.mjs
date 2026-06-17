@@ -14,7 +14,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ASSETS = path.join(__dirname, "..", "assets");
 
 const WA_NUMBER = "573108216274"; // +57 Colombia
-const WA_URL = `https://wa.me/${WA_NUMBER}`;
+const WA_MSG = "Hola TechVenturesCO, quisiera información sobre sus productos disponibles.";
+const WA_URL = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(WA_MSG)}`;
 const DISPLAY_NUMBER = "310 821 6274";
 
 const BRAND_COLOR = "#6d28d9";
