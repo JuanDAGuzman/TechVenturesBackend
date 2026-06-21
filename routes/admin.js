@@ -1287,7 +1287,7 @@ router.get("/catalog-pdf", async (req, res) => {
   try {
     const [{ rows: products }, { rows: categories }, { rows: settingsRows }] = await Promise.all([
       query(
-        `SELECT id, name, category, memory_capacity, price, condition, image_url, description, tier, whatsapp_number
+        `SELECT id, name, category, memory_capacity, price, condition, image_url, description, tier, is_flagship, whatsapp_number
            FROM products WHERE available = true
            ORDER BY category ASC, price ASC, name ASC`
       ),
