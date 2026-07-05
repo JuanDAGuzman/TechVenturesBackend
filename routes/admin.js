@@ -1195,6 +1195,32 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
+// Descarga una imagen desde URL externa y la guarda en PRODUCTS_DIR.
+// Devuelve la URL pública /uploads/products/... o null si falla.
+async function downloadExternalImage(externalUrl, oldLocalUrl) {
+  try {
+    const r = await fetch(externalUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; TechVenturesCO/1.0)" },
+      redirect: "follow",
+    });
+    if (!r.ok) return null;
+    const contentType = r.headers.get("content-type") || "image/jpeg";
+    const extMap = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+    const ext = extMap[contentType.split(";")[0].trim()] ?? "jpg";
+    const buffer = Buffer.from(await r.arrayBuffer());
+    // Borrar imagen anterior si estaba guardada localmente
+    if (oldLocalUrl?.startsWith("/uploads/")) {
+      const oldPath = path.join(PRODUCTS_DIR, oldLocalUrl.split("/").pop());
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    }
+    const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+    fs.writeFileSync(path.join(PRODUCTS_DIR, filename), buffer);
+    return `/uploads/products/${filename}`;
+  } catch {
+    return null;
+  }
+}
+
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
@@ -1203,6 +1229,11 @@ router.post("/products", async (req, res) => {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
+    // Si la imagen es una URL externa, descargarla y guardarla localmente para que no expire
+    let finalImageUrl = image_url || null;
+    if (finalImageUrl && !finalImageUrl.startsWith("/uploads/")) {
+      finalImageUrl = (await downloadExternalImage(finalImageUrl, null)) ?? finalImageUrl;
+    }
     const { rows } = await query(
       `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -1215,7 +1246,7 @@ router.post("/products", async (req, res) => {
         condition?.trim() || "",
         description?.trim() || null,
         available !== false,
-        image_url || null,
+        finalImageUrl,
         tierValue,
         is_flagship === true,
         normalizeWhatsappNumber(whatsapp_number),
@@ -1237,6 +1268,12 @@ router.patch("/products/:id", async (req, res) => {
     // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
     const hasImage = image_url !== undefined;
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
+    // Si la imagen nueva es una URL externa, descargarla y guardarla localmente para que no expire
+    let resolvedImageUrl = image_url ?? null;
+    if (hasImage && resolvedImageUrl && !resolvedImageUrl.startsWith("/uploads/")) {
+      const { rows: cur } = await query(`SELECT image_url FROM products WHERE id = $1`, [id]);
+      resolvedImageUrl = (await downloadExternalImage(resolvedImageUrl, cur[0]?.image_url)) ?? resolvedImageUrl;
+    }
     const flagshipValue = is_flagship === true;
     const whatsappValue = normalizeWhatsappNumber(whatsapp_number);
 
@@ -1251,7 +1288,7 @@ router.patch("/products/:id", async (req, res) => {
       hasImage
         ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
-           available !== false, image_url || null, tierValue, flagshipValue, whatsappValue, id]
+           available !== false, resolvedImageUrl, tierValue, flagshipValue, whatsappValue, id]
         : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
            Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
            available !== false, tierValue, flagshipValue, whatsappValue, id]
