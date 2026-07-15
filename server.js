@@ -15,6 +15,7 @@ import adminRoutes from "./routes/admin.js";
 import catalogRoutes from "./routes/catalog.js";
 import diagnostics from "./routes/diagnostics.js";
 import webauthnRoutes from "./routes/webauthn.js";
+import metricsRoutes from "./routes/metrics.js";
 import { verifySMTP } from "./services/mailer.js";
 import { query } from "./db.js";
 
@@ -159,6 +160,7 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+app.use("/api/admin/metrics", adminBruteforceLimiter, requireAdmin, metricsRoutes);
 app.use("/api/admin", adminBruteforceLimiter, requireAdmin, adminRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/webauthn", webauthnLoginLimiter, webauthnRoutes);
