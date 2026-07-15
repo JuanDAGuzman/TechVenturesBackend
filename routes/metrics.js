@@ -3,38 +3,66 @@ import { query } from "../db.js";
 
 const router = Router();
 
-// Palabras a eliminar del nombre del producto para normalizar/agrupar
+// ── Palabras a eliminar (marcas, series, SKUs) ────────────────────────────────
 const NOISE_WORDS = [
-  // Fabricantes de tarjetas y CPUs
-  "nvidia","amd","intel","geforce","radeon",
+  // Fabricantes GPU/CPU
+  "nvidia","amd","intel",
   // Marcas AIB
   "asus","evga","msi","gigabyte","sapphire","xfx","powercolor","palit",
   "zotac","pny","inno3d","gainward","galax","colorful","manli",
-  // Series / líneas de producto
-  "rog","strix","nitro\\+","nitro","red devil","hellhound","pulse",
+  // Sub-marcas y series
+  "rog","strix","aorus","nitro\\+","nitro","red devil","hellhound","pulse",
   "gaming x trio","gaming x","gaming oc","gaming","ventus","trio","suprim",
   "eagle","dual","tuf","phoenix","rebel","founders edition","founders",
-  "reference","black edition","white edition",
-  // Códigos de SKU de fabricantes
-  "xc3","ftw3","ftw","xc ultra","xc",
-  // Prefijos de arquitectura GPU (RTX/GTX/RX son prefijos, no parte del modelo)
-  "rtx","gtx","rx",
+  "reference","black edition","white edition","black","white","edition",
+  "boost","le","v2","v3",
+  // Prefijos de arquitectura (versión CON espacio: "RTX 3070")
+  "rtx","gtx","rx","geforce","radeon",
+  // Códigos de SKU
+  "xc3","ftw3","ftw","xc ultra","xc","oc",
   // Prefijos de familia CPU
   "core","ryzen","threadripper","pentium","celeron","athlon",
 ];
 
-// Construimos el regex una sola vez al arrancar
-const NOISE_RE = new RegExp(
-  `\\b(${NOISE_WORDS.join("|")})\\b`,
-  "gi"
-);
+const NOISE_RE = new RegExp(`\\b(${NOISE_WORDS.join("|")})\\b`, "gi");
+
+// Prefijos de arquitectura pegados al número sin espacio: rx580, rtx3070, gtx1660
+const ARCH_GLUED_RE = /\b(rtx|gtx|rx|radeon|geforce)(?=\d)/gi;
+
+// Specs de memoria/capacidad: 8gb, 16gb, 1tb, 512mb, 24gb gddr6x, etc.
+const MEMORY_RE = /\b\d+\s*(gb|tb|mb|gddr\w*)\b/gi;
+
+// Cantidades de unidades: "x5", "x2" al final (ej. "5600xt x5" = 5 unidades)
+const QUANTITY_RE = /\bx\d+\b/gi;
+
+// Normalizar sufijos de modelo: "3060ti" → "3060 ti", "5600xt" → "5600 xt"
+const SUFFIX_RE = /(\d)(ti|xt|xtx|super|gre|plus|ultra)\b/gi;
 
 function normalizeProduct(raw) {
   if (!raw?.trim()) return null;
-  // Reemplazar guiones por espacios para que "i7-12700K" → "i7 12700k"
   let s = raw.toLowerCase().replace(/-/g, " ").trim();
+
+  // 1. Prefijos de arquitectura sin espacio (rx580 → 580, rtx3070 → 3070)
+  s = s.replace(ARCH_GLUED_RE, "");
+
+  // 2. Palabras de ruido con word boundary (marcas, series, prefijos con espacio)
   s = s.replace(NOISE_RE, " ");
+
+  // 2b. Limpiar caracteres no alfanuméricos sobrantes (ej. "+" de "nitro+")
+  s = s.replace(/[^a-z0-9\s]/g, " ");
+
+  // 3. Specs de memoria (8gb, 16gb gddr6x, etc.)
+  s = s.replace(MEMORY_RE, " ");
+
+  // 4. Cantidades de unidades (x2, x5…)
+  s = s.replace(QUANTITY_RE, " ");
+
+  // 5. Asegurar espacio entre número y sufijo de modelo
+  s = s.replace(SUFFIX_RE, "$1 $2");
+
+  // 6. Colapsar espacios
   s = s.replace(/\s+/g, " ").trim();
+
   return s || null;
 }
 
