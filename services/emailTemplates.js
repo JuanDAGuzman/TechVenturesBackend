@@ -19,6 +19,15 @@ function escapeHtml(s = "") {
     .replaceAll('"', "&quot;");
 }
 
+function fmt12h(hhmm) {
+  if (!hhmm) return "—";
+  const [h, m] = String(hhmm).slice(0, 5).split(":");
+  const hour = parseInt(h, 10);
+  const suffix = hour >= 12 ? "PM" : "AM";
+  const h12 = hour % 12 || 12;
+  return `${h12}:${m} ${suffix}`;
+}
+
 function minutesBetween(start, end) {
   if (!start || !end) return null;
   const [sh, sm] = start.split(":").map(Number);
@@ -141,7 +150,7 @@ export function emailForInPerson(appt) {
 
   const rows = `
     ${detailRow("Fecha", dayjs(date).format("DD/MM/YYYY"))}
-    ${detailRow("Horario", `${start_time || "—"} – ${end_time || "—"}`)}
+    ${detailRow("Horario", `${fmt12h(start_time)} – ${fmt12h(end_time)}`)}
     ${detailRow("Tipo de cita", typeLabel)}
     ${detailRow("Producto", product || "—")}
     ${detailRow("Estado", "CONFIRMADA")}
@@ -177,7 +186,7 @@ export function emailForInPerson(appt) {
 
 Tipo: ${typeLabel}
 Fecha: ${dayjs(date).format("DD/MM/YYYY")}
-Horario: ${start_time || "—"} – ${end_time || "—"}
+Horario: ${fmt12h(start_time)} – ${fmt12h(end_time)}
 Producto: ${product || "—"}
 Estado: CONFIRMADA
 
@@ -281,7 +290,7 @@ export function buildReminderEmail(appt, { minutesLeft } = {}) {
       : `Sin ensayo (${m} min)`;
   const isVisit = appt.type_code === "TRYOUT" || appt.type_code === "PICKUP";
   const date = appt.date;
-  const time = appt.start_time ? `${appt.start_time} – ${appt.end_time}` : "—";
+  const time = appt.start_time ? `${fmt12h(appt.start_time)} – ${fmt12h(appt.end_time)}` : "—";
 
   let etaLabel = "~1 hora";
   if (typeof minutesLeft === "number") {
@@ -290,9 +299,7 @@ export function buildReminderEmail(appt, { minutesLeft } = {}) {
     else etaLabel = "~1 hora";
   }
 
-  const title = `Recordatorio: tu cita hoy a las ${
-    appt.start_time || ""
-  } — TechVenturesCO`;
+  const title = `Recordatorio: tu cita hoy a las ${fmt12h(appt.start_time)} — TechVenturesCO`;
   const headerText = "Recordatorio de tu cita";
 
   const rows = `
@@ -340,7 +347,7 @@ export function buildAdminNewAppointmentEmail(appt) {
 
   const horario =
     appt.start_time && appt.end_time
-      ? `${appt.start_time} – ${appt.end_time}`
+      ? `${fmt12h(appt.start_time)} – ${fmt12h(appt.end_time)}`
       : "—";
 
   const subject = isShipping
@@ -572,8 +579,8 @@ export function buildRescheduledEmail(appt, { oldDate, oldStart, oldEnd } = {}) 
   const typeLabel = typeLabelWithMinutes(appt.type_code, appt);
   const newDateFmt = dayjs(appt.date).format("DD/MM/YYYY");
   const oldDateFmt = oldDate ? dayjs(oldDate).format("DD/MM/YYYY") : "—";
-  const newTime = `${appt.start_time || "—"} – ${appt.end_time || "—"}`;
-  const oldTime = `${oldStart || "—"} – ${oldEnd || "—"}`;
+  const newTime = `${fmt12h(appt.start_time)} – ${fmt12h(appt.end_time)}`;
+  const oldTime = `${fmt12h(oldStart)} – ${fmt12h(oldEnd)}`;
 
   const title = "Tu cita ha sido reagendada — TechVenturesCO";
   const headerText = "Cita reagendada";
