@@ -203,6 +203,13 @@ async function applySchemaIdempotent() {
   }
 }
 
+async function ensureProductOriginalPrice() {
+  await query(`
+    ALTER TABLE products
+    ADD COLUMN IF NOT EXISTS original_price NUMERIC
+  `);
+}
+
 async function ensureAppointmentsMinutesColumn() {
   await query(`
     ALTER TABLE appointments
@@ -268,6 +275,7 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
       await applySchemaIdempotent();
       await ensureAppointmentsMinutesColumn();
     }
+    await ensureProductOriginalPrice();
 
     verifySMTP().catch(() => { });
 

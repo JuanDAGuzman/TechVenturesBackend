@@ -1198,20 +1198,23 @@ function normalizeWhatsappNumber(raw) {
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
+    const origPrice = original_price !== undefined && original_price !== "" && !isNaN(Number(original_price))
+      ? Number(original_price) : null;
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO products (name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         name.trim(),
         category.trim(),
         memory_capacity?.trim() || null,
         Number(price),
+        origPrice,
         condition?.trim() || "",
         description?.trim() || null,
         available !== false,
@@ -1232,28 +1235,30 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
 
     // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
     const hasImage = image_url !== undefined;
     const tierValue = VALID_TIERS.includes(tier) ? tier : null;
     const flagshipValue = is_flagship === true;
     const whatsappValue = normalizeWhatsappNumber(whatsapp_number);
+    const origPrice = original_price !== undefined && original_price !== "" && !isNaN(Number(original_price))
+      ? Number(original_price) : null;
 
     const { rows } = await query(
       hasImage
-        ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, image_url=$8, tier=$9, is_flagship=$10, whatsapp_number=$11, updated_at=NOW()
-           WHERE id=$12 RETURNING *`
-        : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4,
-                condition=$5, description=$6, available=$7, tier=$8, is_flagship=$9, whatsapp_number=$10, updated_at=NOW()
-           WHERE id=$11 RETURNING *`,
+        ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4, original_price=$5,
+                condition=$6, description=$7, available=$8, image_url=$9, tier=$10, is_flagship=$11, whatsapp_number=$12, updated_at=NOW()
+           WHERE id=$13 RETURNING *`
+        : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4, original_price=$5,
+                condition=$6, description=$7, available=$8, tier=$9, is_flagship=$10, whatsapp_number=$11, updated_at=NOW()
+           WHERE id=$12 RETURNING *`,
       hasImage
         ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
-           Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
+           Number(price ?? 0), origPrice, condition?.trim() ?? "", description?.trim() || null,
            available !== false, image_url || null, tierValue, flagshipValue, whatsappValue, id]
         : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
-           Number(price ?? 0), condition?.trim() ?? "", description?.trim() || null,
+           Number(price ?? 0), origPrice, condition?.trim() ?? "", description?.trim() || null,
            available !== false, tierValue, flagshipValue, whatsappValue, id]
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
