@@ -1568,7 +1568,7 @@ router.post("/bundle-deals", async (req, res) => {
     const { rows } = await query(
       `INSERT INTO bundle_deals (product_id, min_quantity, bundle_price, active, sort_order)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [Number(product_id), Number(min_quantity), Number(bundle_price), !!active, Number(sort_order)]
+      [product_id, Number(min_quantity), Number(bundle_price), !!active, Number(sort_order)]
     );
     return res.json({ ok: true, deal: rows[0] });
   } catch (err) {
@@ -1590,7 +1590,7 @@ router.patch("/bundle-deals/:id", async (req, res) => {
          sort_order   = COALESCE($5, sort_order)
        WHERE id = $6 RETURNING *`,
       [
-        product_id != null ? Number(product_id) : null,
+        product_id != null ? product_id : null,
         min_quantity != null ? Number(min_quantity) : null,
         bundle_price != null ? Number(bundle_price) : null,
         active != null ? !!active : null,
