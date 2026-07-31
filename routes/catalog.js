@@ -73,7 +73,7 @@ router.get("/bundle-deals", async (req, res) => {
   try {
     const { rows } = await query(`
       SELECT bd.id, bd.min_quantity, bd.bundle_price, bd.sort_order,
-             p.id AS product_id, p.name, p.category, p.price, p.image_url,
+             p.id AS product_id, p.name, p.category, p.price, p.image_url, p.whatsapp_number,
              p.memory_capacity, p.condition
       FROM bundle_deals bd
       JOIN products p ON p.id = bd.product_id
