@@ -1546,10 +1546,11 @@ router.post("/products/:id/image-url", async (req, res) => {
 router.get("/bundle-deals", async (req, res) => {
   try {
     const { rows } = await query(`
-      SELECT bd.id, bd.product_id, bd.min_quantity, bd.bundle_price, bd.active, bd.sort_order,
-             p.name AS product_name, p.price AS product_price, p.category, p.memory_capacity
+      SELECT bd.id, bd.match_name, bd.min_quantity, bd.bundle_price, bd.active, bd.sort_order,
+             COUNT(p.id) AS matching_count
       FROM bundle_deals bd
-      JOIN products p ON p.id = bd.product_id
+      LEFT JOIN products p ON p.name ILIKE '%' || bd.match_name || '%' AND p.available = true
+      GROUP BY bd.id
       ORDER BY bd.sort_order ASC, bd.id ASC
     `);
     return res.json({ ok: true, deals: rows });
@@ -1561,14 +1562,14 @@ router.get("/bundle-deals", async (req, res) => {
 
 router.post("/bundle-deals", async (req, res) => {
   try {
-    const { product_id, min_quantity, bundle_price, active = true, sort_order = 0 } = req.body;
-    if (!product_id || !min_quantity || !bundle_price) {
+    const { match_name, min_quantity, bundle_price, active = true, sort_order = 0 } = req.body;
+    if (!match_name?.trim() || !min_quantity || !bundle_price) {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
     const { rows } = await query(
-      `INSERT INTO bundle_deals (product_id, min_quantity, bundle_price, active, sort_order)
+      `INSERT INTO bundle_deals (match_name, min_quantity, bundle_price, active, sort_order)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [product_id, Number(min_quantity), Number(bundle_price), !!active, Number(sort_order)]
+      [match_name.trim(), Number(min_quantity), Number(bundle_price), !!active, Number(sort_order)]
     );
     return res.json({ ok: true, deal: rows[0] });
   } catch (err) {
@@ -1580,17 +1581,17 @@ router.post("/bundle-deals", async (req, res) => {
 router.patch("/bundle-deals/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { product_id, min_quantity, bundle_price, active, sort_order } = req.body;
+    const { match_name, min_quantity, bundle_price, active, sort_order } = req.body;
     const { rows } = await query(
       `UPDATE bundle_deals SET
-         product_id   = COALESCE($1, product_id),
+         match_name   = COALESCE($1, match_name),
          min_quantity = COALESCE($2, min_quantity),
          bundle_price = COALESCE($3, bundle_price),
          active       = COALESCE($4, active),
          sort_order   = COALESCE($5, sort_order)
        WHERE id = $6 RETURNING *`,
       [
-        product_id != null ? product_id : null,
+        match_name != null ? match_name.trim() : null,
         min_quantity != null ? Number(min_quantity) : null,
         bundle_price != null ? Number(bundle_price) : null,
         active != null ? !!active : null,

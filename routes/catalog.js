@@ -72,12 +72,25 @@ router.get("/settings", async (req, res) => {
 router.get("/bundle-deals", async (req, res) => {
   try {
     const { rows } = await query(`
-      SELECT bd.id, bd.min_quantity, bd.bundle_price, bd.sort_order,
-             p.id AS product_id, p.name, p.category, p.price, p.image_url, p.whatsapp_number,
-             p.memory_capacity, p.condition
+      SELECT
+        bd.id, bd.match_name, bd.min_quantity, bd.bundle_price, bd.sort_order,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', p.id, 'name', p.name, 'category', p.category,
+              'price', p.price, 'image_url', p.image_url,
+              'memory_capacity', p.memory_capacity,
+              'whatsapp_number', p.whatsapp_number
+            ) ORDER BY p.price ASC
+          ) FILTER (WHERE p.id IS NOT NULL),
+          '[]'
+        ) AS products
       FROM bundle_deals bd
-      JOIN products p ON p.id = bd.product_id
-      WHERE bd.active = true AND p.available = true
+      LEFT JOIN products p
+        ON p.name ILIKE '%' || bd.match_name || '%'
+        AND p.available = true
+      WHERE bd.active = true AND bd.match_name <> ''
+      GROUP BY bd.id
       ORDER BY bd.sort_order ASC, bd.id ASC
     `);
     return res.json({ ok: true, deals: rows });

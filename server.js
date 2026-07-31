@@ -214,7 +214,7 @@ async function ensureBundleDeals() {
   await query(`
     CREATE TABLE IF NOT EXISTS bundle_deals (
       id           SERIAL PRIMARY KEY,
-      product_id   UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      match_name   TEXT NOT NULL DEFAULT '',
       min_quantity INTEGER NOT NULL DEFAULT 2,
       bundle_price NUMERIC NOT NULL,
       active       BOOLEAN NOT NULL DEFAULT TRUE,
@@ -222,6 +222,9 @@ async function ensureBundleDeals() {
       created_at   TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  // Migrate from old product_id schema if it exists
+  await query(`ALTER TABLE bundle_deals ADD COLUMN IF NOT EXISTS match_name TEXT NOT NULL DEFAULT ''`);
+  await query(`ALTER TABLE bundle_deals DROP COLUMN IF EXISTS product_id`);
 }
 
 async function ensureAppointmentsMinutesColumn() {
