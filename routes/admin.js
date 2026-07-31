@@ -1541,6 +1541,81 @@ router.post("/products/:id/image-url", async (req, res) => {
   }
 });
 
+// ── Bundle deals (ofertas por cantidad) ────────────────────────────────────
+
+router.get("/bundle-deals", async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT bd.id, bd.product_id, bd.min_quantity, bd.bundle_price, bd.active, bd.sort_order,
+             p.name AS product_name, p.price AS product_price, p.category, p.memory_capacity
+      FROM bundle_deals bd
+      JOIN products p ON p.id = bd.product_id
+      ORDER BY bd.sort_order ASC, bd.id ASC
+    `);
+    return res.json({ ok: true, deals: rows });
+  } catch (err) {
+    console.error("[admin/bundle-deals GET]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.post("/bundle-deals", async (req, res) => {
+  try {
+    const { product_id, min_quantity, bundle_price, active = true, sort_order = 0 } = req.body;
+    if (!product_id || !min_quantity || !bundle_price) {
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    }
+    const { rows } = await query(
+      `INSERT INTO bundle_deals (product_id, min_quantity, bundle_price, active, sort_order)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [Number(product_id), Number(min_quantity), Number(bundle_price), !!active, Number(sort_order)]
+    );
+    return res.json({ ok: true, deal: rows[0] });
+  } catch (err) {
+    console.error("[admin/bundle-deals POST]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.patch("/bundle-deals/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { product_id, min_quantity, bundle_price, active, sort_order } = req.body;
+    const { rows } = await query(
+      `UPDATE bundle_deals SET
+         product_id   = COALESCE($1, product_id),
+         min_quantity = COALESCE($2, min_quantity),
+         bundle_price = COALESCE($3, bundle_price),
+         active       = COALESCE($4, active),
+         sort_order   = COALESCE($5, sort_order)
+       WHERE id = $6 RETURNING *`,
+      [
+        product_id != null ? Number(product_id) : null,
+        min_quantity != null ? Number(min_quantity) : null,
+        bundle_price != null ? Number(bundle_price) : null,
+        active != null ? !!active : null,
+        sort_order != null ? Number(sort_order) : null,
+        Number(id),
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    return res.json({ ok: true, deal: rows[0] });
+  } catch (err) {
+    console.error("[admin/bundle-deals PATCH]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+router.delete("/bundle-deals/:id", async (req, res) => {
+  try {
+    await query(`DELETE FROM bundle_deals WHERE id = $1`, [Number(req.params.id)]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[admin/bundle-deals DELETE]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 // ── Passkeys (WebAuthn) para login del admin con Windows Hello / huella ────
 const ADMIN_USER_ID = crypto.createHash("sha256").update("techventuresco-admin").digest();
 

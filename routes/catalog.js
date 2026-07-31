@@ -68,4 +68,23 @@ router.get("/settings", async (req, res) => {
   }
 });
 
+// Ofertas de cantidad/bundle activas (público)
+router.get("/bundle-deals", async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT bd.id, bd.min_quantity, bd.bundle_price, bd.sort_order,
+             p.id AS product_id, p.name, p.category, p.price, p.image_url,
+             p.memory_capacity, p.condition
+      FROM bundle_deals bd
+      JOIN products p ON p.id = bd.product_id
+      WHERE bd.active = true AND p.available = true
+      ORDER BY bd.sort_order ASC, bd.id ASC
+    `);
+    return res.json({ ok: true, deals: rows });
+  } catch (err) {
+    console.error("[catalog/bundle-deals]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
 export default router;
