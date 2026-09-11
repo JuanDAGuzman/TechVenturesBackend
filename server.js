@@ -248,13 +248,16 @@ async function ensureAppointmentsMinutesColumn() {
 const PORT = Number(process.env.PORT || 4000);
 
 // ── Auto-marcar citas pasadas como DONE ──────────────────────────────────────
+// Antes solo cubría TRYOUT/PICKUP — las citas de tipo SHIPPING que quedaban
+// CONFIRMED (nadie las marcó como SHIPPED ni las canceló) se quedaban
+// atascadas para siempre y aparecían como "En proceso" en las métricas.
+// Ahora cubre cualquier tipo de cita.
 async function autoMarkDone() {
   try {
     const result = await query(`
       UPDATE appointments
       SET status = 'DONE'
       WHERE status = 'CONFIRMED'
-        AND type_code IN ('TRYOUT', 'PICKUP')
         AND date < (NOW() AT TIME ZONE 'America/Bogota')::date
     `);
     if (result.rowCount > 0) {
