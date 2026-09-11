@@ -251,7 +251,9 @@ router.get("/", async (req, res) => {
       WHERE date BETWEEN $1 AND $2
     `, [from, to]);
 
-    const customers = groupCustomers(customersQ.rows).slice(0, 20);
+    const allCustomers = groupCustomers(customersQ.rows);
+    const customersTotal = allCustomers.length;
+    const customers = allCustomers.slice(0, 20);
 
     // ── 5. Distribución por día de la semana ────────────────────────────────
     const weekdayQ = await query(`
@@ -332,6 +334,7 @@ router.get("/", async (req, res) => {
         completed: Number(r.completed),
       })),
       products,
+      customersTotal,
       customers: customers.map(c => ({
         name:      c.name,
         id_number: c.id_number,
