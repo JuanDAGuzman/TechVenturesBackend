@@ -1028,56 +1028,133 @@ router.delete("/availability-windows/:id", async (req, res) => {
 // BLACKLIST - Gestión de clientes bloqueados
 // ============================================================================
 
-// Buscar cliente por cédula, nombre o teléfono
+// Buscar cliente por cédula, nombre o teléfono.
+// Se agrupa en JS (no en SQL) por identidad real del cliente — cédula primero,
+// luego teléfono, luego nombre normalizado — para que la misma persona no
+// aparezca fragmentada en varias "coincidencias" solo porque una cita tiene
+// su nombre en mayúsculas distintas o el teléfono con otro formato.
+function normalizePhoneDigitsAdmin(raw) {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  return digits || null;
+}
+
+function customerIdentityKey(row) {
+  const id = row.customer_id_number?.trim();
+  if (id) return `id:${id}`;
+  const phone = normalizePhoneDigitsAdmin(row.customer_phone);
+  if (phone) return `phone:${phone}`;
+  return `name:${row.customer_name?.toLowerCase().trim() ?? "desconocido"}`;
+}
+
 router.get("/search-customer", async (req, res) => {
   try {
     const { q } = req.query;
-    if (!q) {
+    if (!q?.trim()) {
       return res.status(400).json({ ok: false, error: "MISSING_QUERY" });
     }
 
     const searchTerm = `%${q.trim()}%`;
 
-    // Buscar en appointments
-    // Hacemos LEFT JOIN con blacklist para traer el estado de una vez
-    // Agrupamos por los datos del cliente para consolidar estadísticas
+    // Trae cada cita individual que coincide — se agrupa/consolida abajo
     const { rows } = await query(
       `SELECT
         a.customer_name,
         a.customer_id_number,
         a.customer_email,
         a.customer_phone,
-        COUNT(a.id) as total_appointments,
-        COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW') as no_shows,
-        COUNT(a.id) FILTER (WHERE a.status = 'CONFIRMED') as confirmed,
-        COUNT(a.id) FILTER (WHERE a.status = 'DONE') as completed,
-        COUNT(a.id) FILTER (WHERE a.status = 'CANCELLED') as cancelled,
-        b.reason as blacklist_reason,
-        b.blocked_at as blacklist_date,
-        b.notes as blacklist_notes,
-        CASE WHEN b.customer_id_number IS NOT NULL THEN true ELSE false END as is_blacklisted
+        a.type_code,
+        a.status,
+        a.product,
+        a.delivery_method,
+        a.shipping_city,
+        a.date::text AS date,
+        b.reason      AS blacklist_reason,
+        b.blocked_at  AS blacklist_date,
+        b.notes       AS blacklist_notes,
+        (b.customer_id_number IS NOT NULL) AS is_blacklisted
       FROM appointments a
       LEFT JOIN customer_blacklist b ON a.customer_id_number = b.customer_id_number
       WHERE
         a.customer_id_number ILIKE $1 OR
-        a.customer_phone ILIKE $1 OR
-        a.customer_name ILIKE $1
-      GROUP BY
-        a.customer_name,
-        a.customer_id_number,
-        a.customer_email,
-        a.customer_phone,
-        b.customer_id_number,
-        b.reason,
-        b.blocked_at,
-        b.notes
-      LIMIT 50`,
+        a.customer_phone     ILIKE $1 OR
+        a.customer_name      ILIKE $1
+      ORDER BY a.date DESC
+      LIMIT 500`,
       [searchTerm]
     );
 
+    const groups = new Map();
+    for (const r of rows) {
+      const key = customerIdentityKey(r);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          customer_name: r.customer_name,
+          customer_id_number: r.customer_id_number,
+          customer_email: r.customer_email,
+          customer_phone: r.customer_phone,
+          is_blacklisted: false,
+          blacklist_reason: null,
+          blacklist_date: null,
+          blacklist_notes: null,
+          total_appointments: 0,
+          no_shows: 0,
+          confirmed: 0,
+          completed: 0,
+          shipped: 0,
+          cancelled: 0,
+          tryout: 0,
+          pickup: 0,
+          shipping: 0,
+          cities: [],
+          history: [],
+          _lastDate: null,
+        });
+      }
+      const g = groups.get(key);
+      g.total_appointments += 1;
+      if (r.status === "NO_SHOW")   g.no_shows += 1;
+      if (r.status === "CONFIRMED") g.confirmed += 1;
+      if (r.status === "DONE")      g.completed += 1;
+      if (r.status === "SHIPPED")   g.shipped += 1;
+      if (r.status === "CANCELLED") g.cancelled += 1;
+      if (r.type_code === "TRYOUT")   g.tryout += 1;
+      if (r.type_code === "PICKUP")   g.pickup += 1;
+      if (r.type_code === "SHIPPING") g.shipping += 1;
+      if (r.shipping_city?.trim() && !g.cities.includes(r.shipping_city.trim())) {
+        g.cities.push(r.shipping_city.trim());
+      }
+      if (r.is_blacklisted) {
+        g.is_blacklisted   = true;
+        g.blacklist_reason = r.blacklist_reason;
+        g.blacklist_date   = r.blacklist_date;
+        g.blacklist_notes  = r.blacklist_notes;
+      }
+      // Conserva nombre/teléfono/email/cédula del registro más reciente
+      if (!g._lastDate || r.date > g._lastDate) {
+        g._lastDate         = r.date;
+        g.customer_name     = r.customer_name || g.customer_name;
+        g.customer_email    = r.customer_email || g.customer_email;
+        g.customer_phone    = r.customer_phone || g.customer_phone;
+        g.customer_id_number = r.customer_id_number || g.customer_id_number;
+      }
+      if (g.history.length < 15) {
+        g.history.push({
+          date: r.date,
+          product: r.product,
+          type_code: r.type_code,
+          status: r.status,
+          delivery_method: r.delivery_method,
+          shipping_city: r.shipping_city,
+        });
+      }
+    }
+
+    const items = [...groups.values()].map(({ _lastDate, ...g }) => g);
+
     return res.json({
       ok: true,
-      items: rows,
+      items,
     });
   } catch (err) {
     console.error("[search-customer]", err);

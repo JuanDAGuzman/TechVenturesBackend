@@ -315,6 +315,10 @@ router.get("/", async (req, res) => {
           pickup:        Number(overview.pickup),
           shipping:      Number(overview.shipping_type),
         },
+        byDelivery: {
+          in_person:     Number(overview.in_person),
+          shipping:      Number(overview.by_shipping),
+        },
         byCarrier: {
           picap:         Number(overview.picap),
           interrapidisimo: Number(overview.interrapidisimo),
