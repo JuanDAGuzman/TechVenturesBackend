@@ -214,6 +214,18 @@ async function ensureCategoryNamesUppercase() {
   // Algunas categorías se crearon con casing mixto (ej. "Celulares" vs "NVIDIA").
   // Se normalizan ambas tablas en el mismo sentido para que category = name
   // siga coincidiendo exactamente después del cambio.
+
+  // El seed antiguo de schema.sql recreaba "Intel"/"Componentes"/"Celulares" junto a sus
+  // versiones en mayúsculas. Se elimina solo la copia sobrante: debe existir su gemela en
+  // mayúsculas y no tener ningún producto asignado.
+  const dup = await query(`
+    DELETE FROM categories c
+    WHERE c.name <> UPPER(c.name)
+      AND EXISTS (SELECT 1 FROM categories d WHERE d.name = UPPER(c.name) AND d.id <> c.id)
+      AND NOT EXISTS (SELECT 1 FROM products p WHERE p.category = c.name)
+  `);
+  if (dup.rowCount > 0) console.log(`[categories] ${dup.rowCount} categoría(s) duplicada(s) por mayúsculas eliminada(s)`);
+
   try {
     await query(`UPDATE categories SET name = UPPER(name) WHERE name <> UPPER(name)`);
   } catch (e) {

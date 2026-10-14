@@ -19,9 +19,9 @@ CREATE TABLE IF NOT EXISTS categories (
 INSERT INTO categories (name, color, sort_order) VALUES
   ('NVIDIA',      '#76B900', 0),
   ('AMD',         '#ED1C24', 1),
-  ('Intel',       '#0068B5', 2),
-  ('Componentes', '#64748b', 3),
-  ('Celulares',   '#8B5CF6', 4)
+  ('INTEL',       '#0068B5', 2),
+  ('COMPONENTES', '#64748b', 3),
+  ('CELULARES',   '#8B5CF6', 4)
 ON CONFLICT (name) DO NOTHING;
 
 COMMIT;
