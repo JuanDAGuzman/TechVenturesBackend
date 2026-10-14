@@ -1574,27 +1574,40 @@ router.get("/image-search", async (req, res) => {
     const key = process.env.SERPAPI_KEY;
     if (!key) return res.status(500).json({ ok: false, error: "SERPAPI_NOT_CONFIGURED" });
 
-    const params = new URLSearchParams({
-      engine: "google_images",
-      api_key: key,
-      q: q.trim(),
-      num: "16",
-      safe: "active",
-    });
-
-    const r    = await fetch(`https://serpapi.com/search.json?${params}`);
-    const data = await r.json();
-
-    if (!r.ok || data.error) {
-      console.error("[image-search] SerpAPI error:", data.error ?? data);
-      return res.status(502).json({ ok: false, error: "SEARCH_ERROR" });
+    // Nombres largos suelen no dar resultados: se reintenta con menos palabras
+    // (máx. 3 intentos, cada uno consume una búsqueda de SerpAPI).
+    const words = q.trim().split(/s+/);
+    const queries = [q.trim()];
+    for (const n of [6, 4]) {
+      if (words.length > n) queries.push(words.slice(0, n).join(" "));
     }
 
-    const images = (data.images_results || []).slice(0, 16).map((item) => ({
-      url:   item.original,
-      thumb: item.thumbnail,
-      title: item.title,
-    }));
+    let images = [];
+    for (const query of queries) {
+      const params = new URLSearchParams({
+        engine: "google_images",
+        api_key: key,
+        q: query,
+        num: "16",
+        safe: "active",
+      });
+      const r    = await fetch(`https://serpapi.com/search.json?${params}`);
+      const data = await r.json();
+
+      const noResults = /hasn't returned any results/i.test(data.error || "");
+      if (noResults) continue;
+      if (!r.ok || data.error) {
+        console.error("[image-search] SerpAPI error:", data.error ?? data);
+        return res.status(502).json({ ok: false, error: "SEARCH_ERROR" });
+      }
+
+      images = (data.images_results || []).slice(0, 16).map((item) => ({
+        url:   item.original,
+        thumb: item.thumbnail,
+        title: item.title,
+      }));
+      if (images.length) break;
+    }
 
     return res.json({ ok: true, images });
   } catch (err) {
