@@ -210,6 +210,22 @@ async function ensureProductOriginalPrice() {
   `);
 }
 
+async function ensureCategoryNamesUppercase() {
+  // Algunas categorías se crearon con casing mixto (ej. "Celulares" vs "NVIDIA").
+  // Se normalizan ambas tablas en el mismo sentido para que category = name
+  // siga coincidiendo exactamente después del cambio.
+  try {
+    await query(`UPDATE categories SET name = UPPER(name) WHERE name <> UPPER(name)`);
+  } catch (e) {
+    if (e.code === "23505") {
+      console.warn("[categories] Dos categorías coinciden al pasarlas a mayúsculas, revisar manualmente:", e.message);
+    } else {
+      throw e;
+    }
+  }
+  await query(`UPDATE products SET category = UPPER(category) WHERE category <> UPPER(category)`);
+}
+
 async function ensureBundleDeals() {
   await query(`
     CREATE TABLE IF NOT EXISTS bundle_deals (
@@ -297,6 +313,7 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
     }
     await ensureProductOriginalPrice();
     await ensureBundleDeals();
+    await ensureCategoryNamesUppercase();
 
     verifySMTP().catch(() => { });
 

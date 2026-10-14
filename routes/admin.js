@@ -1422,7 +1422,7 @@ router.post("/categories", async (req, res) => {
 
     const { rows } = await query(
       `INSERT INTO categories (name, color, sort_order) VALUES ($1, $2, $3) RETURNING *`,
-      [name.trim(), color || "#64748b", sortOrder]
+      [name.trim().toUpperCase(), color || "#64748b", sortOrder]
     );
     return res.status(201).json({ ok: true, category: rows[0] });
   } catch (err) {
