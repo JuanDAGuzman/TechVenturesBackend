@@ -226,6 +226,29 @@ async function ensureCategoryNamesUppercase() {
   await query(`UPDATE products SET category = UPPER(category) WHERE category <> UPPER(category)`);
 }
 
+// Permite agrupar categorías dentro de otra (ej. FUENTES DE PODER dentro de COMPONENTES).
+// La asignación inicial de las piezas conocidas corre solo la primera vez que se crea
+// la columna, para no deshacer cambios que luego haga el admin.
+async function ensureCategoryParent() {
+  const { rows } = await query(`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'categories' AND column_name = 'parent_id'
+  `);
+  if (rows.length) return;
+
+  await query(`
+    ALTER TABLE categories
+    ADD COLUMN parent_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL
+  `);
+  await query(`
+    UPDATE categories
+    SET parent_id = (SELECT id FROM categories WHERE name = 'COMPONENTES')
+    WHERE parent_id IS NULL
+      AND name IN ('FUENTES DE PODER', 'BOARDS', 'MEMORIAS RAM', 'ALMACENAMIENTO', 'DISIPADORES', 'PROCESADORES')
+      AND EXISTS (SELECT 1 FROM categories WHERE name = 'COMPONENTES')
+  `);
+}
+
 async function ensureBundleDeals() {
   await query(`
     CREATE TABLE IF NOT EXISTS bundle_deals (
@@ -314,6 +337,7 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
     await ensureProductOriginalPrice();
     await ensureBundleDeals();
     await ensureCategoryNamesUppercase();
+    await ensureCategoryParent();
 
     verifySMTP().catch(() => { });
 

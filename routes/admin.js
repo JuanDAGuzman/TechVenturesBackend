@@ -1402,7 +1402,7 @@ router.get("/catalog-pdf", async (req, res) => {
 router.get("/categories", async (req, res) => {
   try {
     const { rows } = await query(
-      `SELECT id, name, color, sort_order FROM categories ORDER BY sort_order ASC, name ASC`
+      `SELECT id, name, color, sort_order, parent_id FROM categories ORDER BY sort_order ASC, name ASC`
     );
     return res.json({ ok: true, categories: rows });
   } catch (err) {
@@ -1432,16 +1432,41 @@ router.post("/categories", async (req, res) => {
   }
 });
 
-// Actualizar color de una categoría
+// Actualizar color y/o sección padre de una categoría.
+// parent_id: id de la sección que la contiene (null = categoría de primer nivel).
+// Solo se permite un nivel: un padre no puede tener padre y quien tiene hijas no puede ser hija.
 router.patch("/categories/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-    const { color } = req.body;
-    if (!color?.trim()) return res.status(400).json({ ok: false, error: "MISSING_COLOR" });
+    const id = Number(req.params.id);
+    const hasColor  = typeof req.body.color === "string" && req.body.color.trim() !== "";
+    const hasParent = Object.prototype.hasOwnProperty.call(req.body, "parent_id");
+    if (!hasColor && !hasParent) return res.status(400).json({ ok: false, error: "NOTHING_TO_UPDATE" });
+
+    if (hasParent && req.body.parent_id !== null && req.body.parent_id !== "") {
+      const parentId = Number(req.body.parent_id);
+      if (!Number.isInteger(parentId) || parentId === id) {
+        return res.status(400).json({ ok: false, error: "INVALID_PARENT" });
+      }
+      const { rows: parentRows } = await query(`SELECT parent_id FROM categories WHERE id = $1`, [parentId]);
+      if (!parentRows.length) return res.status(404).json({ ok: false, error: "PARENT_NOT_FOUND" });
+      if (parentRows[0].parent_id !== null) return res.status(400).json({ ok: false, error: "PARENT_IS_CHILD" });
+      const { rows: kids } = await query(`SELECT 1 FROM categories WHERE parent_id = $1 LIMIT 1`, [id]);
+      if (kids.length) return res.status(400).json({ ok: false, error: "HAS_CHILDREN" });
+    }
+
+    const sets = [];
+    const params = [];
+    if (hasColor) { params.push(req.body.color.trim()); sets.push(`color = $${params.length}`); }
+    if (hasParent) {
+      const raw = req.body.parent_id;
+      params.push(raw === null || raw === "" ? null : Number(raw));
+      sets.push(`parent_id = $${params.length}`);
+    }
+    params.push(id);
 
     const { rows } = await query(
-      `UPDATE categories SET color = $1 WHERE id = $2 RETURNING *`,
-      [color.trim(), id]
+      `UPDATE categories SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true, category: rows[0] });

@@ -47,7 +47,7 @@ router.get("/products", async (req, res) => {
 router.get("/categories", async (req, res) => {
   try {
     const { rows } = await query(
-      `SELECT id, name, color FROM categories ORDER BY sort_order ASC, name ASC`
+      `SELECT id, name, color, parent_id FROM categories ORDER BY sort_order ASC, name ASC`
     );
     return res.json({ ok: true, categories: rows });
   } catch (err) {
