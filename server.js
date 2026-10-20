@@ -210,6 +210,23 @@ async function ensureProductOriginalPrice() {
   `);
 }
 
+// Composición de los PCs armados: { components: [{type,name}], includes: [{type,name}] }
+async function ensureProductBuild() {
+  await query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS build JSONB`);
+}
+
+// Crea la categoría de PCs armados una sola vez (si luego el admin la borra o renombra, no se recrea)
+async function ensurePrebuiltCategory() {
+  const flag = await query(`SELECT 1 FROM store_settings WHERE key = 'prebuilt_category_seeded'`);
+  if (flag.rows.length) return;
+  const { rows } = await query(`SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM categories`);
+  await query(
+    `INSERT INTO categories (name, color, sort_order) VALUES ('PCS ARMADOS', '#6d28d9', $1) ON CONFLICT (name) DO NOTHING`,
+    [rows[0].next]
+  );
+  await query(`INSERT INTO store_settings (key, value) VALUES ('prebuilt_category_seeded', '1') ON CONFLICT (key) DO NOTHING`);
+}
+
 async function ensureCategoryNamesUppercase() {
   // Algunas categorías se crearon con casing mixto (ej. "Celulares" vs "NVIDIA").
   // Se normalizan ambas tablas en el mismo sentido para que category = name
@@ -347,9 +364,11 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
       await ensureAppointmentsMinutesColumn();
     }
     await ensureProductOriginalPrice();
+    await ensureProductBuild();
     await ensureBundleDeals();
     await ensureCategoryNamesUppercase();
     await ensureCategoryParent();
+    await ensurePrebuiltCategory();
 
     verifySMTP().catch(() => { });
 

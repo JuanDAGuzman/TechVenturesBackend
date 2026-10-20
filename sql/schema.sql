@@ -278,6 +278,9 @@ CREATE TABLE IF NOT EXISTS products (
 -- Número de WhatsApp alternativo por producto (si es NULL, usa el general)
 ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
 
+-- Composición de PCs armados (componentes e incluidos)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS build JSONB;
+
 CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_available ON products(available);
 CREATE INDEX IF NOT EXISTS idx_products_price     ON products(price);

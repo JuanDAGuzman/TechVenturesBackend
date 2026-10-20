@@ -1272,10 +1272,28 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
+// Composición de un PC armado. null = sin composición; undefined = valor inválido (no se toca)
+function sanitizeBuild(raw) {
+  if (raw === null) return null;
+  if (!raw || typeof raw !== "object") return undefined;
+  const clean = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .slice(0, 20)
+      .map((i) => ({
+        type: String(i?.type ?? "").trim().toUpperCase().slice(0, 40),
+        name: String(i?.name ?? "").trim().slice(0, 160),
+      }))
+      .filter((i) => i.name);
+  const components = clean(raw.components);
+  const includes = clean(raw.includes);
+  if (!components.length && !includes.length) return null;
+  return { components, includes };
+}
+
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
@@ -1283,8 +1301,8 @@ router.post("/products", async (req, res) => {
     const origPrice = original_price !== undefined && original_price !== "" && !isNaN(Number(original_price))
       ? Number(original_price) : null;
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO products (name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
        RETURNING *`,
       [
         name.trim(),
@@ -1299,6 +1317,7 @@ router.post("/products", async (req, res) => {
         tierValue,
         is_flagship === true,
         normalizeWhatsappNumber(whatsapp_number),
+        (() => { const b = sanitizeBuild(build); return b ? JSON.stringify(b) : null; })(),
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1312,31 +1331,37 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build } = req.body;
 
-    // Si viene image_url en el body la actualiza; si no viene (undefined), conserva la existente
-    const hasImage = image_url !== undefined;
-    const tierValue = VALID_TIERS.includes(tier) ? tier : null;
-    const flagshipValue = is_flagship === true;
-    const whatsappValue = normalizeWhatsappNumber(whatsapp_number);
-    const origPrice = original_price !== undefined && original_price !== "" && !isNaN(Number(original_price))
-      ? Number(original_price) : null;
+    const sets = [];
+    const vals = [];
+    const set = (col, val, cast = "") => { vals.push(val); sets.push(`${col}=$${vals.length}${cast}`); };
 
+    set("name", name?.trim() ?? "");
+    set("category", category?.trim() ?? "");
+    set("memory_capacity", memory_capacity?.trim() || null);
+    set("price", Number(price ?? 0));
+    set("condition", condition?.trim() ?? "");
+    set("description", description?.trim() || null);
+    set("available", available !== false);
+    set("tier", VALID_TIERS.includes(tier) ? tier : null);
+    set("is_flagship", is_flagship === true);
+
+    // Estos campos solo se tocan si vienen en el body (el interruptor de disponibilidad no los envía)
+    if (original_price !== undefined) {
+      set("original_price", original_price !== "" && original_price !== null && !isNaN(Number(original_price)) ? Number(original_price) : null);
+    }
+    if (whatsapp_number !== undefined) set("whatsapp_number", normalizeWhatsappNumber(whatsapp_number));
+    if (image_url !== undefined) set("image_url", image_url || null);
+    if (build !== undefined) {
+      const clean = sanitizeBuild(build);
+      if (clean !== undefined) set("build", clean ? JSON.stringify(clean) : null, "::jsonb");
+    }
+
+    vals.push(id);
     const { rows } = await query(
-      hasImage
-        ? `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4, original_price=$5,
-                condition=$6, description=$7, available=$8, image_url=$9, tier=$10, is_flagship=$11, whatsapp_number=$12, updated_at=NOW()
-           WHERE id=$13 RETURNING *`
-        : `UPDATE products SET name=$1, category=$2, memory_capacity=$3, price=$4, original_price=$5,
-                condition=$6, description=$7, available=$8, tier=$9, is_flagship=$10, whatsapp_number=$11, updated_at=NOW()
-           WHERE id=$12 RETURNING *`,
-      hasImage
-        ? [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
-           Number(price ?? 0), origPrice, condition?.trim() ?? "", description?.trim() || null,
-           available !== false, image_url || null, tierValue, flagshipValue, whatsappValue, id]
-        : [name?.trim() ?? "", category?.trim() ?? "", memory_capacity?.trim() || null,
-           Number(price ?? 0), origPrice, condition?.trim() ?? "", description?.trim() || null,
-           available !== false, tierValue, flagshipValue, whatsappValue, id]
+      `UPDATE products SET ${sets.join(", ")}, updated_at=NOW() WHERE id=$${vals.length} RETURNING *`,
+      vals
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     return res.json({ ok: true, product: rows[0] });
