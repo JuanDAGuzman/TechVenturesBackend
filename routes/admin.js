@@ -321,12 +321,24 @@ router.get("/windows", async (req, res) => {
   }
 });
 
+// Artículos de una cita con su número de serie. undefined = no viene; [] = vaciar la lista
+function sanitizeItems(raw) {
+  if (!Array.isArray(raw)) return undefined;
+  return raw
+    .slice(0, 20)
+    .map((i) => ({
+      name: String(i?.name ?? "").trim().slice(0, 160),
+      serial: String(i?.serial ?? "").trim().slice(0, 80),
+    }))
+    .filter((i) => i.name);
+}
+
 router.post("/appointments", async (req, res) => {
   try {
     const {
       type_code, date, start_time, end_time,
       customer_name, customer_email, customer_phone, customer_id_number,
-      product, notes,
+      product, notes, items,
       shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
       send_email = true,
     } = req.body || {};
@@ -348,14 +360,15 @@ router.post("/appointments", async (req, res) => {
         (type_code, date, start_time, end_time, slot_minutes,
          customer_name, customer_email, customer_phone, customer_id_number,
          product, notes, delivery_method, status,
-         shipping_address, shipping_neighborhood, shipping_city, shipping_carrier)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'CONFIRMED',$13,$14,$15,$16)
+         shipping_address, shipping_neighborhood, shipping_city, shipping_carrier, items)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'CONFIRMED',$13,$14,$15,$16,$17::jsonb)
        RETURNING id`,
       [
         type_code, date || null, start_time || null, end_time || null, slot_minutes,
         customer_name, customer_email, customer_phone || null, customer_id_number || null,
         product, notes || null, delivery_method,
         shipping_address || null, shipping_neighborhood || null, shipping_city || null, shipping_carrier || null,
+        (() => { const c = sanitizeItems(items); return c && c.length ? JSON.stringify(c) : null; })(),
       ]
     );
 
@@ -366,6 +379,7 @@ router.post("/appointments", async (req, res) => {
         const apptForEmail = {
           id, type_code, date, start_time, end_time, slot_minutes,
           customer_name, customer_email, customer_phone, product, notes,
+          items: sanitizeItems(items) ?? [],
           delivery_method, status: "CONFIRMED",
           shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
         };
@@ -405,6 +419,7 @@ router.get("/appointments", async (req, res) => {
         customer_id_number,
         product,
         notes,
+        items,
         delivery_method,
         status,
         shipping_address,
@@ -447,6 +462,7 @@ router.get("/appointments/:id", async (req, res) => {
         customer_id_number,
         product,
         notes,
+        items,
         delivery_method,
         status,
         shipping_address,
@@ -710,6 +726,7 @@ router.patch("/appointments/:id", async (req, res) => {
       customer_phone,
       product,
       notes,
+      items,
       status,
       delivery_method,
       shipping_address,
@@ -771,6 +788,12 @@ router.patch("/appointments/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
 
+    // Artículos con serial: solo se tocan si vienen en el body
+    const cleanItems = sanitizeItems(items);
+    if (cleanItems !== undefined) {
+      await query(`UPDATE appointments SET items = $1::jsonb WHERE id = $2`, [cleanItems.length ? JSON.stringify(cleanItems) : null, id]);
+    }
+
     // 🚫 BLOQUEO AUTOMÁTICO: Si se marca como NO_SHOW, agregar a blacklist
     if (status === "NO_SHOW") {
       const appointment = rows[0];
@@ -830,10 +853,21 @@ router.patch("/appointments/:id", async (req, res) => {
         (t) => req.body[t.field] != null && String(before[t.field] || "") !== String(req.body[t.field] || "")
       ).map((t) => ({ label: t.label, value: req.body[t.field] }));
 
+      // Cambios en la lista de artículos / seriales
+      if (cleanItems !== undefined && cleanItems.length) {
+        const prev = Array.isArray(before.items) ? before.items : [];
+        if (JSON.stringify(prev) !== JSON.stringify(cleanItems)) {
+          changes.push({
+            label: "Artículos y números de serie",
+            value: cleanItems.map((i) => (i.serial ? `${i.name} (S/N ${i.serial})` : i.name)).join(" · "),
+          });
+        }
+      }
+
       const emailTarget = customer_email || before.customer_email;
       if (changes.length && emailTarget) {
         try {
-          const apptForEmail = { ...before, customer_name: customer_name || before.customer_name };
+          const apptForEmail = { ...before, customer_name: customer_name || before.customer_name, items: cleanItems ?? before.items };
           const result = buildUpdatedDetailsEmail(apptForEmail, { changes });
           if (result) {
             await sendMail({ to: emailTarget, subject: result.subject, html: result.html, text: result.text });
@@ -1272,10 +1306,10 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
-// Garantía en meses: entero entre 1 y 6; undefined si no es válido
+// Garantía en meses: entero entre 1 y 6; null = sin garantía
 function normalizeWarranty(v) {
   const n = Number(v);
-  return Number.isInteger(n) && n >= 1 && n <= 6 ? n : undefined;
+  return v !== null && v !== "" && Number.isInteger(n) && n >= 1 && n <= 6 ? n : null;
 }
 
 // Composición de un PC armado. null = sin composición; undefined = valor inválido (no se toca)
@@ -1324,7 +1358,7 @@ router.post("/products", async (req, res) => {
         is_flagship === true,
         normalizeWhatsappNumber(whatsapp_number),
         (() => { const b = sanitizeBuild(build); return b ? JSON.stringify(b) : null; })(),
-        normalizeWarranty(warranty_months) ?? 1,
+        normalizeWarranty(warranty_months),
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1360,10 +1394,7 @@ router.patch("/products/:id", async (req, res) => {
     }
     if (whatsapp_number !== undefined) set("whatsapp_number", normalizeWhatsappNumber(whatsapp_number));
     if (image_url !== undefined) set("image_url", image_url || null);
-    if (warranty_months !== undefined) {
-      const w = normalizeWarranty(warranty_months);
-      if (w !== undefined) set("warranty_months", w);
-    }
+    if (warranty_months !== undefined) set("warranty_months", normalizeWarranty(warranty_months));
     if (build !== undefined) {
       const clean = sanitizeBuild(build);
       if (clean !== undefined) set("build", clean ? JSON.stringify(clean) : null, "::jsonb");

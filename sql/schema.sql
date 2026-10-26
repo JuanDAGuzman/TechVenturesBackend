@@ -41,7 +41,8 @@ ALTER TABLE appointments
   ADD COLUMN IF NOT EXISTS reminded_once_at       TIMESTAMP NULL,
   ADD COLUMN IF NOT EXISTS shipping_cost          NUMERIC(12,2) NULL,
   ADD COLUMN IF NOT EXISTS shipping_trip_link     TEXT NULL,
-  ADD COLUMN IF NOT EXISTS delivery_code          TEXT NULL;
+  ADD COLUMN IF NOT EXISTS delivery_code          TEXT NULL,
+  ADD COLUMN IF NOT EXISTS items                  JSONB NULL;
 
 -- 3) Constraints (añadir solo si no existen)
 DO $$
@@ -281,8 +282,7 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
 -- Composición de PCs armados (componentes e incluidos)
 ALTER TABLE products ADD COLUMN IF NOT EXISTS build JSONB;
 
--- Meses de garantía por artículo (1 a 6)
-ALTER TABLE products ADD COLUMN IF NOT EXISTS warranty_months INTEGER NOT NULL DEFAULT 1;
+-- warranty_months (garantía, 1 a 6 meses, opcional) la crea ensureProductWarranty() en server.js
 
 CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_available ON products(available);

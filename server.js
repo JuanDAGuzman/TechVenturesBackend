@@ -211,9 +211,25 @@ async function ensureProductOriginalPrice() {
 }
 
 // Composición de los PCs armados: { components: [{type,name}], includes: [{type,name}] }
-// Meses de garantía por artículo (1 a 6). Todos los artículos existentes quedan con 1 mes.
+// Meses de garantía por artículo (1 a 6, opcional). Solo la primera vez que se crea la columna,
+// las tarjetas gráficas existentes (NVIDIA, AMD, INTEL) quedan con 1 mes; el resto, sin garantía.
 async function ensureProductWarranty() {
-  await query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS warranty_months INTEGER NOT NULL DEFAULT 1`);
+  const { rows } = await query(`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'products' AND column_name = 'warranty_months'
+  `);
+  if (rows.length) return;
+  await query(`
+    ALTER TABLE products
+    ADD COLUMN warranty_months INTEGER NULL
+    CHECK (warranty_months IS NULL OR warranty_months BETWEEN 1 AND 6)
+  `);
+  await query(`UPDATE products SET warranty_months = 1 WHERE category IN ('NVIDIA', 'AMD', 'INTEL')`);
+}
+
+// Artículos que lleva el cliente con su número de serie: [{ name, serial }]
+async function ensureAppointmentItems() {
+  await query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS items JSONB`);
 }
 
 async function ensureProductBuild() {
@@ -371,6 +387,7 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
     await ensureProductOriginalPrice();
     await ensureProductBuild();
     await ensureProductWarranty();
+    await ensureAppointmentItems();
     await ensureBundleDeals();
     await ensureCategoryNamesUppercase();
     await ensureCategoryParent();

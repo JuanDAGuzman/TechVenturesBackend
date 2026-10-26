@@ -11,6 +11,10 @@ const BASE_URL =
   process.env.BASE_URL ||
   "https://techventuresbackend-production.up.railway.app";
 
+// Página pública con la política de garantía (se enlaza en los correos al cliente)
+const SITE_URL = (process.env.PUBLIC_SITE_URL || "https://www.techventuresco.com").replace(/\/+$/, "");
+const WARRANTY_URL = `${SITE_URL}/garantia`;
+
 function escapeHtml(s = "") {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -127,6 +131,45 @@ function detailRow(label, value) {
   `;
 }
 
+// Artículos de la cita con su número de serie (filas para detailsTable)
+function itemsOf(appt) {
+  const raw = appt?.items;
+  const arr = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
+  return (Array.isArray(arr) ? arr : []).filter((i) => i && i.name);
+}
+
+function itemsDetailRows(appt) {
+  return itemsOf(appt)
+    .map((i, n) => detailRow(`Artículo ${n + 1}`, i.serial ? `${i.name} — S/N ${i.serial}` : i.name))
+    .join("");
+}
+
+function itemsText(appt) {
+  const items = itemsOf(appt);
+  if (!items.length) return "";
+  return "Artículos y números de serie:\n" + items.map((i) => `- ${i.name}${i.serial ? ` — S/N ${i.serial}` : ""}`).join("\n") + "\n";
+}
+
+// Bloque con el enlace a la política de garantía
+function warrantyBox(appt) {
+  const hasItems = itemsOf(appt).length > 0;
+  return `
+    <div style="margin: 30px 0; padding: 20px; background-color: #f5f3ff; border-left: 4px solid #6d28d9; border-radius: 4px;">
+      <p style="margin: 0 0 12px 0; color: #4c1d95; font-size: 14px; line-height: 1.6;">
+        <strong>Garantía</strong><br>
+        Si tu compra incluye garantía, aquí puedes ver qué cubre, qué no y cómo se tramita.${
+          hasItems ? " Guarda este correo: el número de serie de tu artículo sirve para validarla." : ""
+        }
+      </p>
+      <a href="${WARRANTY_URL}" target="_blank" style="display: inline-block; padding: 10px 18px; background-color: #6d28d9; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 600;">Ver política de garantía</a>
+    </div>
+  `;
+}
+
+function warrantyText() {
+  return `Garantía: qué cubre y cómo se tramita → ${WARRANTY_URL}`;
+}
+
 function infoBox(content) {
   return `
     <div style="margin: 30px 0; padding: 20px; background-color: #eff6ff; border-left: 4px solid #3b82f6; border-radius: 4px;">
@@ -153,6 +196,7 @@ export function emailForInPerson(appt) {
     ${detailRow("Horario", `${fmt12h(start_time)} – ${fmt12h(end_time)}`)}
     ${detailRow("Tipo de cita", typeLabel)}
     ${detailRow("Producto", product || "—")}
+    ${itemsDetailRows(appt)}
     ${detailRow("Estado", "CONFIRMADA")}
   `;
 
@@ -178,6 +222,8 @@ export function emailForInPerson(appt) {
     ${detailsTable(rows)}
 
     ${infoBox(instructions)}
+
+    ${warrantyBox(appt)}
   `;
 
   const html = modernLayout({ title, headerText, content });
@@ -188,7 +234,7 @@ Tipo: ${typeLabel}
 Fecha: ${dayjs(date).format("DD/MM/YYYY")}
 Horario: ${fmt12h(start_time)} – ${fmt12h(end_time)}
 Producto: ${product || "—"}
-Estado: CONFIRMADA
+${itemsText(appt)}Estado: CONFIRMADA
 
 ${
   isTryout
@@ -197,6 +243,8 @@ ${
 }
 
 Si no puedes asistir, responde a este correo para reprogramar.
+
+${warrantyText()}
 
 --
 TechVenturesCO
@@ -226,6 +274,7 @@ export function emailForShipping(appt) {
   const rows = `
     ${detailRow("Fecha de solicitud", dayjs(date).format("DD/MM/YYYY"))}
     ${detailRow("Producto", product || "—")}
+    ${itemsDetailRows(appt)}
     ${detailRow("Ciudad", shipping_city || "—")}
     ${detailRow("Dirección", shipping_address || "—")}
     ${detailRow("Barrio", shipping_neighborhood || "—")}
@@ -250,6 +299,8 @@ export function emailForShipping(appt) {
 
     ${infoBox(instructions)}
 
+    ${warrantyBox(appt)}
+
     <p style="margin: 20px 0 0 0; color: #6b7280; font-size: 14px;">
       Si hay algún dato incorrecto, responde a este correo con la corrección.
     </p>
@@ -260,7 +311,7 @@ export function emailForShipping(appt) {
   const text = `¡Recibimos tus datos de envío!
 
 Producto: ${product || "—"}
-Ciudad: ${shipping_city || "—"}
+${itemsText(appt)}Ciudad: ${shipping_city || "—"}
 Dirección: ${shipping_address || "—"}
 Barrio: ${shipping_neighborhood || "—"}
 Transportadora: ${shipping_carrier || "—"}
@@ -270,6 +321,8 @@ Modalidad: No contraentrega
 - Te contactaremos para confirmar pago y coordinar la recolección.
 - En Bogotá: PICAP o INTERRAPIDÍSIMO. Otras ciudades: INTERRAPIDÍSIMO.
 - Al recibir, cancela el costo de envío a la transportadora (si aplica).
+
+${warrantyText()}
 
 --
 TechVenturesCO
@@ -528,9 +581,11 @@ export function buildShippedEmail(appt, opts = {}) {
       }
     </p>
 
-    ${detailsTable(trackingInfo)}
+    ${detailsTable(trackingInfo + itemsDetailRows(appt))}
 
     ${infoBox(instructions)}
+
+    ${warrantyBox(appt)}
   `;
 
   const html = modernLayout({ title, headerText, content });
@@ -552,6 +607,7 @@ ${
 ${isPicap && rideUrl ? `Link del viaje: ${rideUrl}` : ""}
 ${deliveryCode ? `Código de entrega: ${deliveryCode} (entrégalo al mensajero)` : ""}
 ${!isPicap && fullGuideUrl ? `Ver guía: ${fullGuideUrl}` : ""}
+${itemsText(appt)}${warrantyText()}
 
 ${
   isPicap
@@ -642,11 +698,12 @@ export function buildUpdatedDetailsEmail(appt, { changes = [] } = {}) {
     </p>
     ${detailsTable(changeRows)}
     ${infoBox(`Si hay algún error en los datos o tienes alguna duda, responde a este correo.`)}
+    ${changes.some((c) => c.label === "Artículos y números de serie") ? warrantyBox(appt) : ""}
   `;
 
   const html = modernLayout({ title, headerText, content });
 
-  const text = `Datos de tu cita actualizados.\n\n${changes.map((c) => `${c.label}: ${c.value}`).join("\n")}\n\nSi hay algún error, responde a este correo.\n\n--\nTechVenturesCO\n© ${new Date().getFullYear()}`;
+  const text = `Datos de tu cita actualizados.\n\n${changes.map((c) => `${c.label}: ${c.value}`).join("\n")}\n\nSi hay algún error, responde a este correo.${changes.some((c) => c.label === "Artículos y números de serie") ? `\n\n${warrantyText()}` : ""}\n\n--\nTechVenturesCO\n© ${new Date().getFullYear()}`;
 
   return {
     subject: "Actualización en tu cita — TechVenturesCO",
