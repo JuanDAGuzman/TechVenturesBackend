@@ -211,6 +211,11 @@ async function ensureProductOriginalPrice() {
 }
 
 // Composición de los PCs armados: { components: [{type,name}], includes: [{type,name}] }
+// Meses de garantía por artículo (1 a 6). Todos los artículos existentes quedan con 1 mes.
+async function ensureProductWarranty() {
+  await query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS warranty_months INTEGER NOT NULL DEFAULT 1`);
+}
+
 async function ensureProductBuild() {
   await query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS build JSONB`);
 }
@@ -365,6 +370,7 @@ cron.schedule("0 * * * *", cleanupPicapEvidence, { timezone: "America/Bogota" })
     }
     await ensureProductOriginalPrice();
     await ensureProductBuild();
+    await ensureProductWarranty();
     await ensureBundleDeals();
     await ensureCategoryNamesUppercase();
     await ensureCategoryParent();

@@ -1272,6 +1272,12 @@ function normalizeWhatsappNumber(raw) {
   return digits;
 }
 
+// Garantía en meses: entero entre 1 y 6; undefined si no es válido
+function normalizeWarranty(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1 && n <= 6 ? n : undefined;
+}
+
 // Composición de un PC armado. null = sin composición; undefined = valor inválido (no se toca)
 function sanitizeBuild(raw) {
   if (raw === null) return null;
@@ -1293,7 +1299,7 @@ function sanitizeBuild(raw) {
 // Crear producto
 router.post("/products", async (req, res) => {
   try {
-    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build, warranty_months } = req.body;
     if (!name?.trim() || !category?.trim() || price === undefined || price === null || price === "") {
       return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
     }
@@ -1301,8 +1307,8 @@ router.post("/products", async (req, res) => {
     const origPrice = original_price !== undefined && original_price !== "" && !isNaN(Number(original_price))
       ? Number(original_price) : null;
     const { rows } = await query(
-      `INSERT INTO products (name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+      `INSERT INTO products (name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build, warranty_months)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
        RETURNING *`,
       [
         name.trim(),
@@ -1318,6 +1324,7 @@ router.post("/products", async (req, res) => {
         is_flagship === true,
         normalizeWhatsappNumber(whatsapp_number),
         (() => { const b = sanitizeBuild(build); return b ? JSON.stringify(b) : null; })(),
+        normalizeWarranty(warranty_months) ?? 1,
       ]
     );
     return res.status(201).json({ ok: true, product: rows[0] });
@@ -1331,7 +1338,7 @@ router.post("/products", async (req, res) => {
 router.patch("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build } = req.body;
+    const { name, category, memory_capacity, price, original_price, condition, description, available, image_url, tier, is_flagship, whatsapp_number, build, warranty_months } = req.body;
 
     const sets = [];
     const vals = [];
@@ -1353,6 +1360,10 @@ router.patch("/products/:id", async (req, res) => {
     }
     if (whatsapp_number !== undefined) set("whatsapp_number", normalizeWhatsappNumber(whatsapp_number));
     if (image_url !== undefined) set("image_url", image_url || null);
+    if (warranty_months !== undefined) {
+      const w = normalizeWarranty(warranty_months);
+      if (w !== undefined) set("warranty_months", w);
+    }
     if (build !== undefined) {
       const clean = sanitizeBuild(build);
       if (clean !== undefined) set("build", clean ? JSON.stringify(clean) : null, "::jsonb");

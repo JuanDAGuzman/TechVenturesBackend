@@ -281,6 +281,9 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS whatsapp_number TEXT;
 -- Composición de PCs armados (componentes e incluidos)
 ALTER TABLE products ADD COLUMN IF NOT EXISTS build JSONB;
 
+-- Meses de garantía por artículo (1 a 6)
+ALTER TABLE products ADD COLUMN IF NOT EXISTS warranty_months INTEGER NOT NULL DEFAULT 1;
+
 CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_available ON products(available);
 CREATE INDEX IF NOT EXISTS idx_products_price     ON products(price);
