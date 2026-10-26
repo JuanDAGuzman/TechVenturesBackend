@@ -338,7 +338,7 @@ router.post("/appointments", async (req, res) => {
     const {
       type_code, date, start_time, end_time,
       customer_name, customer_email, customer_phone, customer_id_number,
-      product, notes, items,
+      product, notes,
       shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
       send_email = true,
     } = req.body || {};
@@ -360,15 +360,14 @@ router.post("/appointments", async (req, res) => {
         (type_code, date, start_time, end_time, slot_minutes,
          customer_name, customer_email, customer_phone, customer_id_number,
          product, notes, delivery_method, status,
-         shipping_address, shipping_neighborhood, shipping_city, shipping_carrier, items)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'CONFIRMED',$13,$14,$15,$16,$17::jsonb)
+         shipping_address, shipping_neighborhood, shipping_city, shipping_carrier)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'CONFIRMED',$13,$14,$15,$16)
        RETURNING id`,
       [
         type_code, date || null, start_time || null, end_time || null, slot_minutes,
         customer_name, customer_email, customer_phone || null, customer_id_number || null,
         product, notes || null, delivery_method,
         shipping_address || null, shipping_neighborhood || null, shipping_city || null, shipping_carrier || null,
-        (() => { const c = sanitizeItems(items); return c && c.length ? JSON.stringify(c) : null; })(),
       ]
     );
 
@@ -379,7 +378,6 @@ router.post("/appointments", async (req, res) => {
         const apptForEmail = {
           id, type_code, date, start_time, end_time, slot_minutes,
           customer_name, customer_email, customer_phone, product, notes,
-          items: sanitizeItems(items) ?? [],
           delivery_method, status: "CONFIRMED",
           shipping_address, shipping_neighborhood, shipping_city, shipping_carrier,
         };
@@ -788,7 +786,7 @@ router.patch("/appointments/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
 
-    // Artículos con serial: solo se tocan si vienen en el body
+    // Artículos con serial (registro interno): solo se tocan si vienen en el body y no se envían por correo
     const cleanItems = sanitizeItems(items);
     if (cleanItems !== undefined) {
       await query(`UPDATE appointments SET items = $1::jsonb WHERE id = $2`, [cleanItems.length ? JSON.stringify(cleanItems) : null, id]);
@@ -853,21 +851,11 @@ router.patch("/appointments/:id", async (req, res) => {
         (t) => req.body[t.field] != null && String(before[t.field] || "") !== String(req.body[t.field] || "")
       ).map((t) => ({ label: t.label, value: req.body[t.field] }));
 
-      // Cambios en la lista de artículos / seriales
-      if (cleanItems !== undefined && cleanItems.length) {
-        const prev = Array.isArray(before.items) ? before.items : [];
-        if (JSON.stringify(prev) !== JSON.stringify(cleanItems)) {
-          changes.push({
-            label: "Artículos y números de serie",
-            value: cleanItems.map((i) => (i.serial ? `${i.name} (S/N ${i.serial})` : i.name)).join(" · "),
-          });
-        }
-      }
 
       const emailTarget = customer_email || before.customer_email;
       if (changes.length && emailTarget) {
         try {
-          const apptForEmail = { ...before, customer_name: customer_name || before.customer_name, items: cleanItems ?? before.items };
+          const apptForEmail = { ...before, customer_name: customer_name || before.customer_name };
           const result = buildUpdatedDetailsEmail(apptForEmail, { changes });
           if (result) {
             await sendMail({ to: emailTarget, subject: result.subject, html: result.html, text: result.text });
