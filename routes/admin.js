@@ -329,6 +329,7 @@ function sanitizeItems(raw) {
     .map((i) => ({
       name: String(i?.name ?? "").trim().slice(0, 160),
       serial: String(i?.serial ?? "").trim().slice(0, 80),
+      warranty_months: i?.warranty_months === undefined ? 1 : normalizeWarranty(i.warranty_months),
     }))
     .filter((i) => i.name);
 }
@@ -1061,6 +1062,41 @@ function normalizePhoneDigitsAdmin(raw) {
   return digits || null;
 }
 
+// Suma meses a una fecha ISO (YYYY-MM-DD) sin salirse del mes (31 ene + 1 mes = 28/29 feb)
+function addMonthsISO(iso, months) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1 + months, d));
+  if (dt.getUTCDate() !== d) dt.setUTCDate(0);
+  return dt.toISOString().slice(0, 10);
+}
+
+const bogotaISO = (d) => new Date(d).toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
+
+// Estado de la garantía de un artículo vendido en una cita/envío. La garantía cuenta desde la entrega:
+// la fecha de la cita, o la del despacho si fue un envío.
+function warrantyInfo(row, item) {
+  const months = item.warranty_months === undefined ? 1 : item.warranty_months;
+  const delivered = row.status === "DONE" || row.status === "SHIPPED";
+  const start = row.type_code === "SHIPPING" && row.shipped_at ? bogotaISO(row.shipped_at) : String(row.date).slice(0, 10);
+  const base = {
+    name: item.name,
+    serial: item.serial || "",
+    months: months || null,
+    start,
+    until: null,
+    days_left: null,
+    type_code: row.type_code,
+    appt_status: row.status,
+    product: row.product,
+  };
+  if (!months) return { ...base, status: "none" };
+  const until = addMonthsISO(start, months);
+  if (!delivered) return { ...base, until, status: "pending" };
+  const todayISO = bogotaISO(new Date());
+  const daysLeft = Math.round((Date.parse(until) - Date.parse(todayISO)) / 86400000);
+  return { ...base, until, days_left: daysLeft, status: daysLeft >= 0 ? "active" : "expired" };
+}
+
 function customerIdentityKey(row) {
   const id = row.customer_id_number?.trim();
   if (id) return `id:${id}`;
@@ -1088,6 +1124,8 @@ router.get("/search-customer", async (req, res) => {
         a.type_code,
         a.status,
         a.product,
+        a.items,
+        a.shipped_at,
         a.delivery_method,
         a.shipping_city,
         a.date::text AS date,
@@ -1100,7 +1138,8 @@ router.get("/search-customer", async (req, res) => {
       WHERE
         a.customer_id_number ILIKE $1 OR
         a.customer_phone     ILIKE $1 OR
-        a.customer_name      ILIKE $1
+        a.customer_name      ILIKE $1 OR
+        a.items::text        ILIKE $1
       ORDER BY a.date DESC
       LIMIT 500`,
       [searchTerm]
@@ -1130,6 +1169,7 @@ router.get("/search-customer", async (req, res) => {
           shipping: 0,
           cities: [],
           history: [],
+          warranty_items: [],
           _lastDate: null,
         });
       }
@@ -1159,6 +1199,11 @@ router.get("/search-customer", async (req, res) => {
         g.customer_email    = r.customer_email || g.customer_email;
         g.customer_phone    = r.customer_phone || g.customer_phone;
         g.customer_id_number = r.customer_id_number || g.customer_id_number;
+      }
+      if (Array.isArray(r.items) && g.warranty_items.length < 100) {
+        for (const it of r.items) {
+          if (it && it.name) g.warranty_items.push(warrantyInfo(r, it));
+        }
       }
       if (g.history.length < 15) {
         g.history.push({
