@@ -608,15 +608,17 @@ export function buildRescheduledEmail(appt, { oldDate, oldStart, oldEnd } = {}) 
   const typeLabel = typeLabelWithMinutes(appt.type_code, appt);
   const newDateFmt = dayjs(appt.date).format("DD/MM/YYYY");
   const oldDateFmt = oldDate ? dayjs(oldDate).format("DD/MM/YYYY") : "—";
-  const newTime = `${fmt12h(appt.start_time)} – ${fmt12h(appt.end_time)}`;
-  const oldTime = `${fmt12h(oldStart)} – ${fmt12h(oldEnd)}`;
+  const hasTime = !!(appt.start_time && appt.end_time);
+  const newTime = hasTime ? `${fmt12h(appt.start_time)} – ${fmt12h(appt.end_time)}` : "";
+  const oldTime = oldStart && oldEnd ? `${fmt12h(oldStart)} – ${fmt12h(oldEnd)}` : "";
+  const withTime = (d, t) => (t ? `${d} · ${t}` : d);
 
   const title = "Tu cita ha sido reagendada — TechVenturesCO";
   const headerText = "Cita reagendada";
 
   const rows = `
-    ${detailRow("Nuevo horario", `${newDateFmt} · ${newTime}`)}
-    ${detailRow("Horario anterior", `${oldDateFmt} · ${oldTime}`)}
+    ${detailRow(hasTime ? "Nuevo horario" : "Nueva fecha", withTime(newDateFmt, newTime))}
+    ${detailRow(hasTime ? "Horario anterior" : "Fecha anterior", withTime(oldDateFmt, oldTime))}
     ${detailRow("Tipo de cita", typeLabel)}
     ${detailRow("Estado", "CONFIRMADA")}
   `;
@@ -636,8 +638,8 @@ export function buildRescheduledEmail(appt, { oldDate, oldStart, oldEnd } = {}) 
 
   const text = `Tu cita ha sido reagendada.
 
-Nuevo horario: ${newDateFmt} · ${newTime}
-Horario anterior: ${oldDateFmt} · ${oldTime}
+${hasTime ? "Nuevo horario" : "Nueva fecha"}: ${withTime(newDateFmt, newTime)}
+${hasTime ? "Horario anterior" : "Fecha anterior"}: ${withTime(oldDateFmt, oldTime)}
 Tipo: ${typeLabel}
 Estado: CONFIRMADA
 

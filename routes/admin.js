@@ -669,8 +669,7 @@ router.patch("/appointments/:id/reschedule", async (req, res) => {
     const { id } = req.params;
     const { date, start_time, end_time, notify = true } = req.body || {};
 
-    if (!date || !start_time || !end_time)
-      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+    if (!date) return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
 
     const { rows: cur } = await query(
       `SELECT id, type_code, customer_name, customer_email, slot_minutes,
@@ -683,22 +682,31 @@ router.patch("/appointments/:id/reschedule", async (req, res) => {
     if (!cur.length) return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     const appt = cur[0];
 
+    // Los envíos (SHIPPING) no tienen hora: solo se mueve la fecha.
+    const hasTimes = !!(start_time && end_time);
+    if (!hasTimes && appt.type_code !== "SHIPPING")
+      return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
+
     const oldDate = appt.date;
     const oldStart = appt.start_time;
     const oldEnd = appt.end_time;
 
-    const [sh, sm] = start_time.split(":").map(Number);
-    const [eh, em] = end_time.split(":").map(Number);
-    const slot_minutes = Math.max(0, eh * 60 + em - (sh * 60 + sm));
-
-    await query(
-      `UPDATE appointments SET date = $1, start_time = $2, end_time = $3, slot_minutes = $4 WHERE id = $5`,
-      [date, start_time, end_time, slot_minutes, id]
-    );
+    let slot_minutes = appt.slot_minutes;
+    if (hasTimes) {
+      const [sh, sm] = start_time.split(":").map(Number);
+      const [eh, em] = end_time.split(":").map(Number);
+      slot_minutes = Math.max(0, eh * 60 + em - (sh * 60 + sm));
+      await query(
+        `UPDATE appointments SET date = $1, start_time = $2, end_time = $3, slot_minutes = $4 WHERE id = $5`,
+        [date, start_time, end_time, slot_minutes, id]
+      );
+    } else {
+      await query(`UPDATE appointments SET date = $1 WHERE id = $2`, [date, id]);
+    }
 
     if (notify && appt.customer_email) {
       try {
-        const updated = { ...appt, date, start_time, end_time, slot_minutes };
+        const updated = hasTimes ? { ...appt, date, start_time, end_time, slot_minutes } : { ...appt, date };
         const { subject, html, text } = buildRescheduledEmail(updated, { oldDate, oldStart, oldEnd });
         await sendMail({ to: appt.customer_email, subject, html, text });
         console.log("[reschedule-email] Correo enviado a", appt.customer_email);
