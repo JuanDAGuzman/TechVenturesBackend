@@ -13,6 +13,7 @@ import {
 } from "@simplewebauthn/server";
 
 import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail, buildConfirmationEmail } from "../services/emailTemplates.js";
+import { slimProductImage } from "../utils/productImage.js";
 import { sendMail } from "../services/mailer.js";
 import { rpID, rpName, expectedOrigins } from "../lib/webauthnConfig.js";
 import { setChallenge, takeChallenge } from "../lib/webauthnChallenges.js";
@@ -1330,7 +1331,7 @@ router.get("/products", async (req, res) => {
     const { rows } = await query(
       `SELECT * FROM products ORDER BY price ASC, name ASC`
     );
-    return res.json({ ok: true, products: rows });
+    return res.json({ ok: true, products: rows.map(slimProductImage) });
   } catch (err) {
     console.error("[admin/products GET]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });

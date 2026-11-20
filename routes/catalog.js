@@ -1,7 +1,14 @@
 import express from "express";
 import { query } from "../db.js";
+import { slimProductImage } from "../utils/productImage.js";
 
 const router = express.Router();
+
+// El catálogo es público y cambia poco: los navegadores pueden reutilizar la respuesta unos segundos
+router.use((req, res, next) => {
+  if (req.method === "GET") res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=120");
+  next();
+});
 
 // Listar productos (público) — filtros opcionales: category, q, min_price, max_price
 router.get("/products", async (req, res) => {
@@ -30,15 +37,50 @@ router.get("/products", async (req, res) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const { rows } = await query(
-      `SELECT id, name, category, memory_capacity, price, original_price, condition, image_url, available, description, tier, is_flagship, whatsapp_number, build, warranty_months
+      `SELECT id, name, category, memory_capacity, price, original_price, condition, image_url, available, description, tier, is_flagship, whatsapp_number, build, warranty_months, updated_at
        FROM products ${where}
        ORDER BY price ASC, name ASC`,
       params
     );
 
-    return res.json({ ok: true, products: rows });
+    return res.json({ ok: true, products: rows.map(slimProductImage) });
   } catch (err) {
     console.error("[catalog/products]", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+  }
+});
+
+// Foto de un producto guardada como data-URI: se sirve como archivo, con caché larga
+// (la URL lleva ?v=<updated_at>, así que cambia cuando se edita el producto)
+router.get("/products/:id/image", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(404).end();
+    const { rows } = await query(`SELECT image_url FROM products WHERE id = $1`, [id]);
+    const url = rows[0]?.image_url;
+    if (!url) return res.status(404).end();
+    const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+    if (!m) {
+      if (/^https?:\/\//i.test(url)) return res.redirect(302, url);
+      return res.status(404).end();
+    }
+    res.set({ "Content-Type": m[1], "Cache-Control": "public, max-age=31536000, immutable" });
+    return res.send(Buffer.from(m[2], "base64"));
+  } catch (err) {
+    console.error("[catalog/product-image]", err);
+    return res.status(500).end();
+  }
+});
+
+// Cantidad de productos disponibles por categoría (liviano: lo usa el pie de página)
+router.get("/category-counts", async (_req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT category, COUNT(*)::int AS n FROM products WHERE available = true GROUP BY category`
+    );
+    return res.json({ ok: true, counts: Object.fromEntries(rows.map((r) => [r.category, r.n])) });
+  } catch (err) {
+    console.error("[catalog/category-counts]", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
