@@ -2,6 +2,7 @@
 """
 OCR para guías de envío colombianas (Interrapidísimo, Coordinadora, etc.)
 Uso: python3 extract_guide.py <ruta_imagen>
+     python3 extract_guide.py --price <ruta_imagen> [giros]   (modo rápido: la foto ya viene derecha y reducida)
 Salida: JSON con tracking_number y shipping_cost
 """
 
@@ -12,7 +13,7 @@ import os
 
 try:
     import pytesseract
-    from PIL import Image
+    from PIL import Image, ImageOps
 except ImportError as e:
     print(json.dumps({"ok": False, "error": f"Dependencia faltante: {e}"}))
     sys.exit(1)
@@ -28,6 +29,23 @@ if sys.platform == "win32":
 def limpiar_numero(texto):
     """Elimina puntos y comas de formato colombiano: '12.200' -> '12200'"""
     return re.sub(r'[^\d]', '', texto)
+
+
+VALOR_MIN, VALOR_MAX = 500, 5_000_000
+
+
+def extraer_valor(texto):
+    """Valor a cobrar: primero el número junto a 'Cobrar', luego cualquier '$ 12.345'."""
+    patrones = [
+        r'C[o0]brar[\s\S]{0,30}?\$?\s*(\d{1,3}(?:[.,]\d{3})+)',
+        r'\$\s*(\d{1,3}(?:[.,]\d{3})+)',
+    ]
+    for patron in patrones:
+        for m in re.finditer(patron, texto, re.IGNORECASE):
+            valor = limpiar_numero(m.group(1))
+            if valor and VALOR_MIN <= int(valor) <= VALOR_MAX:
+                return valor
+    return None
 
 
 def extraer_datos(texto):
@@ -87,6 +105,32 @@ def detectar_rotacion(imagen):
     return 0
 
 
+def preparar(imagen_gris, angulo):
+    """Gira, mejora el contraste y amplía las fotos pequeñas para que Tesseract lea mejor."""
+    r = imagen_gris.rotate(angulo, expand=True, fillcolor=255) if angulo else imagen_gris
+    r = ImageOps.autocontrast(r)
+    if r.width < 1400:
+        escala = 1400 / r.width
+        r = r.resize((int(r.width * escala), int(r.height * escala)), Image.LANCZOS)
+    return r
+
+
+def leer_precio(imagen_gris, angulos):
+    """Modo rápido: prueba cada giro y se detiene en cuanto encuentra el valor a cobrar."""
+    tracking = None
+    for angulo in angulos:
+        r = preparar(imagen_gris, angulo)
+        for psm in (11, 6):
+            texto = pytesseract.image_to_string(r, config=f'--psm {psm} -l eng')
+            t, _ = extraer_datos(texto)
+            if t and not tracking:
+                tracking = t
+            valor = extraer_valor(texto)
+            if valor:
+                return tracking, valor
+    return tracking, None
+
+
 def procesar_imagen(ruta):
     imagen_original = Image.open(ruta)
 
@@ -136,6 +180,20 @@ def main():
     if len(sys.argv) < 2:
         print(json.dumps({"ok": False, "error": "Falta ruta de imagen"}))
         sys.exit(1)
+
+    if sys.argv[1] == '--price':
+        ruta = sys.argv[2] if len(sys.argv) > 2 else ''
+        angulos = [int(a) for a in sys.argv[3].split(',')] if len(sys.argv) > 3 else [0, 90, 270, 180]
+        if not os.path.exists(ruta):
+            print(json.dumps({"ok": False, "error": "Archivo no encontrado"}))
+            sys.exit(1)
+        try:
+            tracking, valor = leer_precio(Image.open(ruta).convert('L'), angulos)
+            print(json.dumps({"ok": True, "tracking_number": tracking, "shipping_cost": valor}))
+        except Exception as e:
+            print(json.dumps({"ok": False, "error": str(e)}))
+            sys.exit(1)
+        return
 
     ruta = sys.argv[1]
     if not os.path.exists(ruta):

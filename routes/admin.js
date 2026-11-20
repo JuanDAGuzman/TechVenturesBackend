@@ -14,6 +14,7 @@ import {
 
 import { buildShippedEmail, buildRescheduledEmail, buildUpdatedDetailsEmail, buildConfirmationEmail } from "../services/emailTemplates.js";
 import { slimProductImage } from "../utils/productImage.js";
+import { scanGuideImage } from "../services/guideScanner.js";
 import { sendMail } from "../services/mailer.js";
 import { rpID, rpName, expectedOrigins } from "../lib/webauthnConfig.js";
 import { setChallenge, takeChallenge } from "../lib/webauthnChallenges.js";
@@ -75,6 +76,15 @@ router.post("/extract-guide", async (req, res) => {
 
   if (!imageBase64) {
     return res.status(400).json({ ok: false, error: "NO_IMAGE" });
+  }
+
+  // Método rápido: código de barras para el número de guía + OCR del valor sobre la foto enderezada
+  try {
+    const fast = await scanGuideImage(Buffer.from(imageBase64, "base64"));
+    console.log(`[extract-guide] ${fast.ms} ms | guía: ${fast.source.tracking || "no"} | valor: ${fast.shipping_cost ? "sí" : "no"}`);
+    if (fast.tracking_number || fast.shipping_cost) return res.json(fast);
+  } catch (err) {
+    console.error("[extract-guide] método rápido falló, se usa el anterior:", err.message);
   }
 
   const ext = path.extname(filename).toLowerCase() || ".jpg";
